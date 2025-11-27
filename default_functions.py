@@ -171,7 +171,27 @@ def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,
     print(f"  Malla creada: {len(device.mesh.sites)} puntos")
     fig, ax = device.draw()
     return device
-    
+
+
+def plot_solution(solution):
+    '''
+    Graphs the applied current on the device and the pahse for a fixed current/constant field 
+    :param solution: tdgl.solution object
+    '''
+    #The plot_solution is only used on the 1st simulation section
+    # Create figure with adjusted spacing and plot currents
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))  # Wider figure (10 inches width)
+    _ = solution.plot_currents(ax=axes[0], streamplot=False)
+    _ = solution.plot_currents(ax=axes[1])  
+    plt.subplots_adjust(wspace=0.4)  # Increase horizontal space between subplots
+    plt.tight_layout()  # Automatically adjusts subplots to fit in figure
+    plt.show()
+    #Second plot
+    # Plot a snapshot of the order parameter in the middle of a phase slip
+    t0 = 155
+    solution.solve_step = zero_field_solution.closest_solve_step(t0)
+    fig, axes = solution.plot_order_parameter(figsize=(9, 10))
+    plt.show()
 
 # =========================
 # 5) Magnetization function
