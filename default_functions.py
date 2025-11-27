@@ -190,7 +190,7 @@ def plot_solution(solution):
     # Plot a snapshot of the order parameter in the middle of a phase slip
     t0 = 155
     solution.solve_step = solution.closest_solve_step(t0)
-    fig, axes = solution.plot_order_parameter(figsize=(9, 10))
+    fig, axes = solution.plot_order_parameter(figsize=(10, 4))
     plt.show()
 
 # =========================
@@ -213,7 +213,6 @@ def solve_field(device,field,d=0.1):
     # Defines a list of 10 values for the external magnetic field form 0 to 1 mT
     moments = [] #total magnetic moment
     magnetizations = []  # volumetric magnetization
-    m_solutions = []
     # Loop for each value of B
 
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -233,15 +232,13 @@ def solve_field(device,field,d=0.1):
     # =========================
     magnetizations = np.array(magnetizations)
     # Numeric derivation of the magnetization with respect to the field: dM/dB
-    #suceptibilidad_fast = np.gradient(magnetizaciones_fast, campos_fast)
+    suceptibility = np.gradient(magnetizaciones_fast, field)
     # =========================
     # 5)Save data on files
     # =========================
-    np.savetxt("magnetization_vs_B.txt", np.column_stack((field, magnetizations)),
-               header="B[mT] M[uA/um^3]")
-    #np.savetxt("suceptibilidad_rr_vs_B.txt", np.column_stack((campos_rr, suceptibilidad_rr)),
-               #header="B[mT] dM/dB [uA/(um^3·mT)]")
-    return moments,magnetizations
+    np.savetxt("magnetization_vs_B.txt", np.column_stack((field, magnetizations)),header="B[mT] M[uA/um^3]")
+    np.savetxt("suceptibilidad_rr_vs_B.txt", np.column_stack((field, suceptibility)),header="B[mT] dM/dB [uA/(um^3·mT)]")
+    return moments,magnetizations, suceptibility
 
 def current_application(device,currents,B_field = 0):
     '''
@@ -313,7 +310,7 @@ def critic_currents_augmentation(device,critic_regions,currents,voltages,B= 0):
         maskv1 = voltages <= critic_voltages
         maskv2 = voltages >= critic_voltages
         currents = np.concatenate((currents[mask_left],critic_currents,currents[mask_right]))
-        voltages = np.concatenate((voltages[mask_left],critic_voltages[j],voltages[mask_right]))
+        voltages = np.concatenate((voltages[mask_left],critic_voltages,voltages[mask_right]))
     plot_info1 = {"fig_name":"currents.jpg","title":f'Curva Voltaje vs Corriente ({currents[0]}–{currents[size]}µA)',"x":"Corriente $I$ [$\mu$A]","y":"Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"}
     plot_parameters(currents,voltages,plot_info1)
 
