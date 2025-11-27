@@ -285,7 +285,7 @@ def critic_currents_augmentation(device,critic_regions,currents,voltages,B= 0):
         co = i - epsilon
         cf = i + epsilon
         critic_currents = np.linspace(co, cf, steps)
-        critic_voltages = current_application(device, critic_currents,B = 0)
+        critic_voltages = current_application(device, critic_currents)
         #Masks for the currents
         mask_left = currents <= co 
         mask_right = currents >= cf
@@ -296,19 +296,22 @@ def critic_currents_augmentation(device,critic_regions,currents,voltages,B= 0):
         voltages = np.concatenate((voltages[mask_left],critic_voltages[j],voltages[mask_right]))
     plot_info1 = {"fig_name":"currents.jpg","title":f'Curva Voltaje vs Corriente ({currents[0]}–{currents[size]}µA)',"x":"Corriente $I$ [$\mu$A]","y":"Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"}
     plot_parameters(currents,voltages,plot_info1)
+
 def varying_increments(device,currents,io,ifi,field = 0):
     size = ifi - io +1
     voltages_arr = []
-    devices_arr = []
+
     J = 0
     for h in range(io,ifi):      
         deltay = h
         if h == 3:
             deltay = 4
-        device_l  =create_device(film_poly,half_geometry,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)
+        device_l  =df.create_device(film_poly,half_geometry,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
+        fig, ax = device_l.plot(mesh=False)
         voltages =  current_application(device_l, currents,B_field = field)
-        devices_arr.append(device_l)
         voltages_arr.append(voltages)
         J+= 1
         print(f'progress: {np.round((J/size)*100,3)}')
+    return voltages_arr
+        
 
