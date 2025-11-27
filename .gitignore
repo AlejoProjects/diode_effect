@@ -1,4 +1,6 @@
 .jpeg
 .jpg 
+magnetizacion_vs_B.txt
 .ipynb_checkpoints/
 project_field_h5_files/
+__pycache__/
