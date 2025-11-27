@@ -72,10 +72,10 @@ def default_options(d_filename,skip_t=200,solve_t=200,saves=200):
 def default_solution(device,file_name,vector_potential=0,terminal_currents_applied=[0,0]):
     '''
     This function allows the user to apply different solution cases based on the applied current/field 
-    device: tdgl.device object
-    type_of_solution: String
-    vector_potential: Double
-    terminal_currents: unidimensional array [source_current,drain_current]
+    :param device: tdgl.device object
+    :param type_of_solution: String
+    :param vector_potential: Double
+    :param terminal_currents: unidimensional array [source_current,drain_current]
     Depending on the type_of_solution a solution is implemented
     '''
     options = default_options(file_name)
@@ -122,15 +122,15 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal"):
 def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,translationx=0,incrementx=0.0,incrementy=0.0,translationy=0):
     '''
     Since we're using the same geometry, this function is implemented so we can change the dimensions of the right rectangle hence the position of the drain too : tdgl.polygon object,
-    geometry_used: tdgl.polygon object,
-    geometry_added: tdgl.polygon object,
-    max_edge_length:int,
-    incrementx:float
-    incrementy:float
-    source_dimension: array [width,height]
-    drain_dimension: array [width,height]
-    translationx:float
-    translationy:float
+    :param geometry_used: tdgl.polygon object,
+    :param geometry_added: tdgl.polygon object,
+    :param max_edge_length:int,
+    :param incrementx:float
+    :param incrementy:float
+    :param source_dimension: array [width,height]
+    :param drain_dimension: array [width,height]
+    :param translationx:float
+    :param translationy:float
     The translations move the source and drain along the polygon
     '''
     width_x = dimensions['width_x']
@@ -177,6 +177,14 @@ def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,
 # 5) Magnetization function
 # =========================
 def solve_field(device,field,d=0.1):
+    '''
+    A function that applies a magnetic field sweep to a device and returns the corresponding magnetizations and magnetic moments.
+    
+    :param device: tdgl.device object
+    :param field: List or array of magnetic field values to be applied.
+    :param d: Double, depth of the superconductor in micrometers (default is 0.1 µm).
+    :return: Two lists containing the total magnetic moments and volumetric magnetizations for each applied
+    '''
     d = 0.1  # Superconductor depth in micrometers (µm)
     area = np.sum(device.areas)  # effective area of the device ( µm²)
     # =========================
@@ -216,6 +224,14 @@ def solve_field(device,field,d=0.1):
     return moments,magnetizations
 
 def current_application(device,currents,B_field = 0):
+    '''
+    A function that applies a current sweep to a device and returns the corresponding voltages.
+    
+    :param device: tdgl.device object
+    :param currents: List or array of current values to be applied.
+    :param B_field: Double, optional magnetic field to be applied (default is 0).
+    '''
+
     voltages = []
     # =========================================================
     # Simulation
@@ -251,4 +267,48 @@ def current_application(device,currents,B_field = 0):
     print(f"📊 Tiempo mean time per step was: {(elapsed_time / total_simulations):.2f} seconds.")
     print("-" * 50)
     return voltages
+#Possible critic currents step optimizer function
+def critic_currents_augmentation(device,critic_regions,currents,voltages,B= 0):
+    '''
+    A function that applies a current sweep to a device and returns the corresponding voltages with more resolution in critic regions.
+    
+    :param device: tdgl.device object
+    :param critic_regions: List or array of current values where more resolution is needed.
+    :param currents: List or array of current values to be applied.
+    :param voltages: List or array of voltage values corresponding to the currents.
+    :param B: Double, optional magnetic field to be applied (default is 0).
+    '''
+    size = np.size(currents)
+    steps = 30
+    epsilon = 1
+    for i in critic_regions:
+        co = i - epsilon
+        cf = i + epsilon
+        critic_currents = np.linspace(co, cf, steps)
+        critic_voltages = current_application(device, critic_currents,B = 0)
+        #Masks for the currents
+        mask_left = currents <= co 
+        mask_right = currents >= cf
+        #Masks for the voltages
+        maskv1 = voltages <= critic_voltages
+        maskv2 = voltages >= critic_voltages
+        currents = np.concatenate((currents[mask_left],critic_currents,currents[mask_right]))
+        voltages = np.concatenate((voltages[mask_left],critic_voltages[j],voltages[mask_right]))
+    plot_info1 = {"fig_name":"currents.jpg","title":f'Curva Voltaje vs Corriente ({currents[0]}–{currents[size]}µA)',"x":"Corriente $I$ [$\mu$A]","y":"Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"}
+    plot_parameters(currents,voltages,plot_info1)
+def varying_increments(device,currents,io,ifi,field = 0):
+    size = ifi - io +1
+    voltages_arr = []
+    devices_arr = []
+    J = 0
+    for h in range(io,ifi):      
+        deltay = h
+        if h == 3:
+            deltay = 4
+        device_l  = create_device(device,MAX_EDGE_LENGTH_IV,incrementy=deltay)
+        voltages =  current_application(device_l, currents,B_field = field)
+        devices_arr.append(device_l)
+        voltages_arr.append(voltages)
+        J+= 1
+        print(f'progress: {np.round((J/size)*100,3)}')
 
