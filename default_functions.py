@@ -305,7 +305,7 @@ def varying_increments(device,currents,io,ifi,field = 0):
         deltay = h
         if h == 3:
             deltay = 4
-        device_l  = create_device(device,MAX_EDGE_LENGTH_IV,incrementy=deltay)
+        device_l  =create_device(film_poly,half_geometry,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)
         voltages =  current_application(device_l, currents,B_field = field)
         devices_arr.append(device_l)
         voltages_arr.append(voltages)
