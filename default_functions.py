@@ -299,8 +299,8 @@ def critic_currents_augmentation(device, critic_region, currents, voltages, B=0,
     pos_co = np.where(mask_co)[0]
     pos_cf = np.where(mask_cf)[0]
     if len(pos_co) == 0 or len(pos_cf) == 0:
-            print(f"No se encontraron índices alrededor de {i}, se omite.")
-            continue
+            print(f"No se encontraron índices alrededor de {critic_region}, se omite.")
+            return None 
     # índice real de corte
     indice_co = pos_co[0]
     indice_cf = pos_cf[-1]  # último índice antes del siguiente intervalo
