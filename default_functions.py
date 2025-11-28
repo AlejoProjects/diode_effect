@@ -285,34 +285,48 @@ def current_application(device,currents,B_field = 0):
     print("-" * 50)
     return voltages
 #Possible critic currents step optimizer function
-def critic_currents_augmentation(device,critic_regions,currents,voltages,B= 0):
-    '''
-    A function that applies a current sweep to a device and returns the corresponding voltages with more resolution in critic regions.
-    
-    :param device: tdgl.device object
-    :param critic_regions: List or array of current values where more resolution is needed.
-    :param currents: List or array of current values to be applied.
-    :param voltages: List or array of voltage values corresponding to the currents.
-    :param B: Double, optional magnetic field to be applied (default is 0).
-    '''
+def critic_currents_augmentation(device, critic_region, currents, voltages, B=0, steps=10):
+    import numpy as np
+
     size = np.size(currents)
-    steps = 30
     epsilon = 1
-    for i in critic_regions:
-        co = i - epsilon
-        cf = i + epsilon
-        critic_currents = np.linspace(co, cf, steps)
-        critic_voltages = current_application(device, critic_currents)
-        #Masks for the currents
-        mask_left = currents <= co 
-        mask_right = currents >= cf
-        #Masks for the voltages
-        maskv1 = voltages <= critic_voltages
-        maskv2 = voltages >= critic_voltages
-        currents = np.concatenate((currents[mask_left],critic_currents,currents[mask_right]))
-        voltages = np.concatenate((voltages[mask_left],critic_voltages,voltages[mask_right]))
-    plot_info1 = {"fig_name":"currents.jpg","title":f'Curva Voltaje vs Corriente ({currents[0]}–{currents[size]}µA)',"x":"Corriente $I$ [$\mu$A]","y":"Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"}
-    plot_parameters(currents,voltages,plot_info1)
+    co =  critic_region - epsilon
+    cf =  critic_region + epsilon
+    # Máscaras correctas
+    mask_co = (currents > co) & (currents < co + 1)
+    mask_cf = (currents > cf) & (currents < cf + 1)
+    # Obtener índices correctos
+    pos_co = np.where(mask_co)[0]
+    pos_cf = np.where(mask_cf)[0]
+    if len(pos_co) == 0 or len(pos_cf) == 0:
+            print(f"No se encontraron índices alrededor de {i}, se omite.")
+            continue
+    # índice real de corte
+    indice_co = pos_co[0]
+    indice_cf = pos_cf[-1]  # último índice antes del siguiente intervalo
+    # Crear más puntos en la región crítica
+    critic_currents = np.linspace(co, cf, steps)
+    critic_voltages = df.current_application(device, critic_currents)
+    # Concatenar correctamente
+    currents = np.concatenate((
+    currents[:indice_co],
+    critic_currents,
+    currents[indice_cf:]))
+    voltages = np.concatenate((
+            voltages[:indice_co],
+            critic_voltages,
+            voltages[indice_cf:]
+        ))
+    plot_info1 = {
+        "fig_name": "currents.jpg",
+        "title": f'Curva Voltaje vs Corriente ({currents[0]}–{currents[-1]} µA)',
+        "x": "Corriente $I$ [$\mu$A]",
+        "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
+    }
+
+    df.plot_parameters(currents, voltages, plot_info1)
+    return currents_voltages
+
 
 def varying_increments(device,currents,io,ifi,field = 0):
     size = ifi - io +1
@@ -323,12 +337,13 @@ def varying_increments(device,currents,io,ifi,field = 0):
         deltay = h
         if h == 3:
             deltay = 4
-        device_l  =df.create_device(film_poly,half_geometry,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
-        fig, ax = device_l.plot(mesh=False)
+        device_l  =create_device(film_poly,half_geometry,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
+        fig, ax = device_l.plot(mesh=True)
         voltages =  current_application(device_l, currents,B_field = field)
         voltages_arr.append(voltages)
         J+= 1
         print(f'progress: {np.round((J/size)*100,3)}')
+    print(voltages_arr)
     return voltages_arr
         
 
