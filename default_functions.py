@@ -285,47 +285,51 @@ def current_application(device,currents,B_field = 0):
     print("-" * 50)
     return voltages
 #Possible critic currents step optimizer function
-def critic_currents_augmentation(device, critic_region, currents, voltages, B=0, steps=10):
-    import numpy as np
-
-    size = np.size(currents)
+def critic_currents_augmentation(device, critic_regions,current_interval, B=1.0, steps=10,critic_steps = 20):
+    # the size of the interval, ex: the default interval was 0-15 microA, wich means: size= 15 and current_interval["initial"] = 0 
+    size = current_interval["final"]
+    #The epsilon that sets the total distance of the critic current interval
     epsilon = 1
-    co =  critic_region - epsilon
-    cf =  critic_region + epsilon
-    # Máscaras correctas
-    mask_co = (currents > co) & (currents < co + 1)
-    mask_cf = (currents > cf) & (currents < cf + 1)
-    # Obtener índices correctos
-    pos_co = np.where(mask_co)[0]
-    pos_cf = np.where(mask_cf)[0]
-    if len(pos_co) == 0 or len(pos_cf) == 0:
-            print(f"No se encontraron índices alrededor de {critic_region}, se omite.")
-            return None 
-    # índice real de corte
-    indice_co = pos_co[0]
-    indice_cf = pos_cf[-1]  # último índice antes del siguiente intervalo
-    # Crear más puntos en la región crítica
-    critic_currents = np.linspace(co, cf, steps)
-    critic_voltages = df.current_application(device, critic_currents)
-    # Concatenar correctamente
-    currents = np.concatenate((
-    currents[:indice_co],
-    critic_currents,
-    currents[indice_cf:]))
-    voltages = np.concatenate((
-            voltages[:indice_co],
-            critic_voltages,
-            voltages[indice_cf:]
-        ))
+    cr_size = np.size(critic_regions)
+    currents = []
+    voltages = []
+    for index,i in enumerate(critic_regions):
+        #These cases are defined before co and cf are updated
+      
+        if index = 0:
+         
+            initial = current_interval["initial"]
+            #Accsess the first element of critic_regions hence defining the first interval
+            final = critic_regions[index] - 0.1
+        else:
+            #retrieves the previous cf before it's updated
+            intial = cf + 0.1
+         #Define and updates the critic_currents intrvals set arround an epsilon 
+         co =  i - epsilon
+         cf =  i + epsilon
+        #calculates the next interval from left to right up to the next critic interval
+        previous_currents= np.linspace(intial,final,steps)
+        previous_voltages = current_application(device,previous_currents,B_field = B)
+        critic_currents = np.linspace(co, cf, critic_steps)
+        critic_voltages = current_application(device, critic_currents,B_field = B)
+        # Concatenate correctly the whole interval
+        current_interval = np.concatenate(previous_currents,critic_currents)
+        voltage_interval = np.concatenate(previous_voltages,critic_voltages)
+        currents = np.append(current_interval)
+        voltages = np.append(voltage_interval)
+    finalInterval_currents =np.linspace(cf + 0.1,size,steps)
+    finalInterval_voltages = current_application(device,finalInterval_currents,B_field = B)
+    currents.append(finalInterval_currents)
+    voltages.append(finalInterval_voltages)
     plot_info1 = {
         "fig_name": "currents.jpg",
-        "title": f'Curva Voltaje vs Corriente ({currents[0]}–{currents[-1]} µA)',
+        "title": f'Curva Voltaje vs Corriente ({current_interval[0]}–{current_interval[1]} µA)',
         "x": "Corriente $I$ [$\mu$A]",
-        "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
-    }
-
-    df.plot_parameters(currents, voltages, plot_info1)
-    return currents_voltages
+         "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
+        }
+    
+    plot_parameters(currents, voltages, plot_info1)
+    return currents,voltages
 
 
 def varying_increments(device,currents,io,ifi,field = 0):
