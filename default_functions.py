@@ -286,8 +286,17 @@ def current_application(device,currents,B_field = 0):
     return voltages
 #Possible critic currents step optimizer function
 def critic_currents_augmentation(device, critic_regions,current_interval, B=1.0, steps=10,critic_steps = 20):
+    '''
+    A function that applies a current sweep with more defined calculations arround the critic currents to a device and returns the corresponding voltages.
+    :param device: tdgl.device object
+    :param critic_regions: List or array of current values where the critic regions are located.    
+    :param current_interval: Dictionary with the initial and final values of the current interval.
+    :param B_field: Double, optional magnetic field to be applied (default is 1.0).
+    :param steps: Integer, number of steps for the non-critic regions (default is 10).
+    :param critic_steps: Integer, number of steps for the critic regions (default is 20).
+    '''
     # the size of the interval, ex: the default interval was 0-15 microA, wich means: size= 15 and current_interval["initial"] = 0 
-    size = current_interval["final"]
+    size = (current_interval["final"]-1)
     #The epsilon that sets the total distance of the critic current interval
     epsilon = 1
     cr_size = np.size(critic_regions)
@@ -296,17 +305,17 @@ def critic_currents_augmentation(device, critic_regions,current_interval, B=1.0,
     for index,i in enumerate(critic_regions):
         #These cases are defined before co and cf are updated
       
-        if index = 0:
-         
+        if index == 0:
             initial = current_interval["initial"]
-            #Accsess the first element of critic_regions hence defining the first interval
             final = critic_regions[index] - 0.1
+            #Accsess the first element of critic_regions hence defining the first interval
+        
         else:
             #retrieves the previous cf before it's updated
             intial = cf + 0.1
          #Define and updates the critic_currents intrvals set arround an epsilon 
-         co =  i - epsilon
-         cf =  i + epsilon
+        co =  i - epsilon
+        cf =  i + epsilon
         #calculates the next interval from left to right up to the next critic interval
         previous_currents= np.linspace(intial,final,steps)
         previous_voltages = current_application(device,previous_currents,B_field = B)
@@ -317,6 +326,13 @@ def critic_currents_augmentation(device, critic_regions,current_interval, B=1.0,
         voltage_interval = np.concatenate(previous_voltages,critic_voltages)
         currents = np.append(current_interval)
         voltages = np.append(voltage_interval)
+        plot_info1 = {
+        "fig_name": "currents.jpg",
+        "title": f'Curva Voltaje vs Corriente ({initial}–{final} µA)',
+        "x": "Corriente $I$ [$\mu$A]",
+         "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
+        }
+        plot_parameters(currents, voltages, plot_info1)
     finalInterval_currents =np.linspace(cf + 0.1,size,steps)
     finalInterval_voltages = current_application(device,finalInterval_currents,B_field = B)
     currents.append(finalInterval_currents)
