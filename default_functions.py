@@ -173,7 +173,7 @@ def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,
     return device
 
 
-def plot_solution(solution):
+def plot_solution(solution,subtitle = None,title = None):
     '''
     Graphs the applied current on the device and the pahse for a fixed current/constant field 
     :param solution: tdgl.solution object
@@ -181,8 +181,12 @@ def plot_solution(solution):
     #The plot_solution is only used on the 1st simulation section
     # Create figure with adjusted spacing and plot currents
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))  # Wider figure (10 inches width)
-    _ = solution.plot_currents(ax=axes[0], streamplot=False)
-    _ = solution.plot_currents(ax=axes[1])  
+    if title == None:
+        _ = solution.plot_currents(ax=axes[0], streamplot=False)
+        _ = solution.plot_currents(ax=axes[1])  
+    else:
+        _ = solution.plot_currents(ax=axes[0], streamplot=False,title=title)
+        _ = solution.plot_currents(ax=axes[1],title = title)  
     plt.subplots_adjust(wspace=0.4)  # Increase horizontal space between subplots
     plt.tight_layout()  # Automatically adjusts subplots to fit in figure
     plt.show()
@@ -190,7 +194,10 @@ def plot_solution(solution):
     # Plot a snapshot of the order parameter in the middle of a phase slip
     t0 = 155
     solution.solve_step = solution.closest_solve_step(t0)
-    fig, axes = solution.plot_order_parameter(figsize=(10, 4))
+    if subtitle == None:
+        fig, axes = solution.plot_order_parameter(figsize=(10, 4))
+    else:
+        fig, axes = solution.plot_order_parameter(figsize=(10, 4),subtitle = title)
     plt.show()
 
 # =========================
