@@ -62,19 +62,33 @@ You will need Python installed along with the following libraries:
     ```bash
     jupyter notebook proyecto_electro2.ipynb
     ```
+### Important
+* The parameter section must always be executed
+* The create device can be modified to merge any kind of device. ( if you're using the default geometries be sure to add their imports from the tdgl)
+* The title parameter for the plot_solution function or any tdgl.plot method is used for a modified function on the tdgl library  adding titles to the obtained figures (it's better to set title = None if you dont want to meedle with tdgl source code)
+### Collab exectution
+* If you're using colab a series of small steps are needed:
+    * 1. use ctr+H on chrome or ctr+f on vscode(if you're using the new colab extension) to get to the find section, search for df. ,click the arrow left to the writting space and click replace all without typing anything on the replace writting space (if you want to, select the match the whole word button.)
+      2. Go to the collab Section
+      3. Run the commented step for the installation of the required libraries
+      4. Copy the contents of the default_functions.py script into the functions cell
+      5. copy the contents of the directories.py(yet to be implemented) script into the dir cell
+      6. Remove the lines (if df is not removed):
+        * import default_functions as df 
+        * d = df.d  gamma = df.gamma
+        * xi = df.xi           
+        * london_lambda = df.london_lambda  
+        * d = df.d               
+        * gamma = df.gamma     
+After that you'll be good to go
+### Some advice
+* Any of the functions used in this notebook can be used with any created device. It's just a matter of passing the device object to the function.
+* To change the default simulation values you can edit the default_options and default_solutions functions to set the simulation times and any other parameters located on the default_functions.py script
+* Each simulation section should run independently of the other sections as long as you've executed the parameters* section(customize the parameters as you see fit)
+### Optional
+* If your device supports it you can install cuda and run the script on your cpu adding the parameter on the tdgl.options located in the default_options function.
+* If you're using a cluster you can divide the work needed to be done on the magnetization,varying currents or varying fields to save time.
 
-### Running on Google Colab
-The notebook is optimized for Colab.
-1.  Upload `proyecto_electro2.ipynb` to Colab.
-2.  Follow the **"Collab execution"** instructions in the notebook's markdown cells:
-    * Run the installation cells for `py-tdgl`.
-    * Copy the content of `default_functions.py` into the dedicated cell (or upload the script to the runtime).
-
-## 📊 Example Visualization
-
-*Visualize the superconducting order parameter dynamics:*
-
-> *[Insert a GIF or Image of your order parameter animation here]*
 
 ## 🤝 Contributing
 
