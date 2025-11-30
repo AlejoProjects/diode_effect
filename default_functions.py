@@ -173,32 +173,44 @@ def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,
     return device
 
 
-def plot_solution(solution,subtitle = None,title = None):
+def plot_solution(solution,order_title = None,current_title = None,currentBool = True):
     '''
     Graphs the applied current on the device and the pahse for a fixed current/constant field 
     :param solution: tdgl.solution object
     '''
     #The plot_solution is only used on the 1st simulation section
     # Create figure with adjusted spacing and plot currents
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))  # Wider figure (10 inches width)
-    if title == None:
-        _ = solution.plot_currents(ax=axes[0], streamplot=False)
-        _ = solution.plot_currents(ax=axes[1])  
-    else:
-        _ = solution.plot_currents(ax=axes[0], streamplot=False,title=title)
-        _ = solution.plot_currents(ax=axes[1],title = title)  
-    plt.subplots_adjust(wspace=0.4)  # Increase horizontal space between subplots
-    plt.tight_layout()  # Automatically adjusts subplots to fit in figure
-    plt.show()
+    
+    if currentBool == True:
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))  # Wider figure (10 inches width)
+        if current_title == None:
+            _ = solution.plot_currents(ax=axes[0], streamplot=False)
+            _ = solution.plot_currents(ax=axes[1])  
+        else:
+            _ = solution.plot_currents(ax=axes[0], streamplot=False,title=current_title)
+            _ = solution.plot_currents(ax=axes[1],title = current_title)  
+        plt.subplots_adjust(wspace=0.4)  # Increase horizontal space between subplots
+        plt.tight_layout()  # Automatically adjusts subplots to fit in figure
+        plt.show()
     #Second plot
     # Plot a snapshot of the order parameter in the middle of a phase slip
     t0 = 155
     solution.solve_step = solution.closest_solve_step(t0)
-    if subtitle == None:
+    if order_title == None:
         fig, axes = solution.plot_order_parameter(figsize=(10, 4))
     else:
-        fig, axes = solution.plot_order_parameter(figsize=(10, 4),subtitle = title)
+        fig, axes = solution.plot_order_parameter(figsize=(10, 4),subtitle = order_title)
     plt.show()
+
+def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True):
+    if titleBool == True:
+        plot_solution(solution,currentBool=currentBool,order_title=used_titles["order_parameter"],current_title=used_titles["sheet_current"])
+        solution.plot_vorticity(figsize=figure_size,title=used_titles["vorticity"])
+        solution.plot_scalar_potential(figsize=figure_size,title=used_titles["scalar_potential"])
+    else:
+        plot_solution(solution,currentBool=currentBool)
+        solution.plot_vorticity(figsize=figure_size)
+        solution.plot_scalar_potential(figsize=figure_size)
 
 # =========================
 # 5) Magnetization function
@@ -372,5 +384,6 @@ def varying_increments(device,currents,io,ifi,field = 0):
         print(f'progress: {np.round((J/size)*100,3)}')
     print(voltages_arr)
     return voltages_arr
+
         
 
