@@ -105,7 +105,7 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal"):
     if plot_type == "plot":
         plt.plot(p1,p2, "o-", color=color_applied)
     elif plot_type == "scatter":
-        plt.scatter(p1,p2, "o-", color=color_applied)
+        plt.scatter(p1,p2, "o-", color=color_applied,s=3)
     else:
         print("insert a valid plot type")
         return None
@@ -169,7 +169,7 @@ def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,
     #There are 4 malformed cells as of now , 4/5030 
     clear_output(wait=True)
     print(f"  Malla creada: {len(device.mesh.sites)} puntos")
-    fig, ax = device.draw()
+    fig, ax = device.draw(figsize=(10, 4))
     return device
 
 
@@ -239,7 +239,7 @@ def solve_field(device,field,d=0.1):
     # =========================
     magnetizations = np.array(magnetizations)
     # Numeric derivation of the magnetization with respect to the field: dM/dB
-    suceptibility = np.gradient(magnetizaciones_fast, field)
+    suceptibility = np.gradient(magnetizations, field)
     # =========================
     # 5)Save data on files
     # =========================
