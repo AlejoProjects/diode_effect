@@ -100,12 +100,12 @@ plt.rcParams['lines.linewidth'] = 2.0
 # ====================================================
 # 4.)Device Creation Function
 # ====================================================
-def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal"):
+def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_path = None):
     plt.figure(figsize=(6, 4))
     if plot_type == "plot":
         plt.plot(p1,p2, "o-", color=color_applied)
     elif plot_type == "scatter":
-        plt.scatter(p1,p2, "o-", color=color_applied,s=3)
+        plt.scatter(p1,p2,color=color_applied,s=3)
     else:
         print("insert a valid plot type")
         return None
@@ -114,7 +114,8 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal"):
     plt.title(plot_labels["title"])
     plt.grid(True)
     plt.show()
-    plt.savefig(plot_labels["fig_name"])
+    if dir_path != None:
+        plt.savefig(dir_path)
 # ====================================================
 ## 4. ⚙️ Global Parameters(Optimized)
 # ====================================================
@@ -173,10 +174,14 @@ def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,
     return device
 
 
-def plot_solution(solution,order_title = None,current_title = None,currentBool = True):
+def plot_solution(solution,order_title = None,current_title = None,currentBool = True,order_path= None,current_path= None):
     '''
     Graphs the applied current on the device and the pahse for a fixed current/constant field 
     :param solution: tdgl.solution object
+    :param order_title: String, title for the order parameter plot
+    :param current_title: String, title for the current plot
+    :param currentBool: Boolean, if True plots the currents
+    :param order_path: String, path to save the order parameter plot
     '''
     #The plot_solution is only used on the 1st simulation section
     # Create figure with adjusted spacing and plot currents
@@ -192,6 +197,8 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
         plt.subplots_adjust(wspace=0.4)  # Increase horizontal space between subplots
         plt.tight_layout()  # Automatically adjusts subplots to fit in figure
         plt.show()
+        if current_path != None:
+            fig.savefig(current_path)
     #Second plot
     # Plot a snapshot of the order parameter in the middle of a phase slip
     t0 = 155
@@ -201,14 +208,26 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
     else:
         fig, axes = solution.plot_order_parameter(figsize=(10, 4),subtitle = order_title)
     plt.show()
+    if order_path != None:
+            
+            fig.savefig(order_path)
 
-def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True):
+def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True,order_path= None,current_path= None):
+    '''
+    Graphs a group of plots including the current, order parameter, vorticity and scalar potential
+    :param solution: tdgl.solution object   
+    :param figure_size: Tuple, size of the figures
+    :param used_titles: Dictionary with titles for each plot
+    :param currentBool: Boolean, if True plots the currents
+    :param titleBool: Boolean, if True uses titles for the plots
+    :param order_path: String, path to save the order parameter plot
+    :param current_path: String, path to save the current plot'''
     if titleBool == True:
-        plot_solution(solution,currentBool=currentBool,order_title=used_titles["order_parameter"],current_title=used_titles["sheet_current"])
+        plot_solution(solution,currentBool=currentBool,order_title=used_titles["order_parameter"],current_title=used_titles["sheet_current"],order_path=order_path,current_path=current_path)
         solution.plot_vorticity(figsize=figure_size,title=used_titles["vorticity"])
         solution.plot_scalar_potential(figsize=figure_size,title=used_titles["scalar_potential"])
     else:
-        plot_solution(solution,currentBool=currentBool)
+        plot_solution(solution,currentBool=currentBool,order_path=order_path,current_path=current_path)
         solution.plot_vorticity(figsize=figure_size)
         solution.plot_scalar_potential(figsize=figure_size)
 
