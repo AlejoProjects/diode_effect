@@ -30,3 +30,15 @@ def create_default_directories():
     check_create_dir(subsection42_dir)
     check_create_dir(subsection43_dir)
     return section1_dir,section2_dir,section3_dir,section4_dir, subsection21_dir,subsection22_dir,subsection23_dir,subsection41_dir,subsection42_dir,subsection43_dir
+    
+def clean_source():
+    source = "./figures/"
+    if os.path.exists(source):
+        import shutil
+        shutil.rmtree(source)
+    create_default_directories()
+def clean_directory(directory):
+    if os.path.exists(directory):
+        import shutil
+        shutil.rmtree(directory)
+        os.makedirs(directory)

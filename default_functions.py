@@ -120,7 +120,7 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_
 ## 4. ⚙️ Global Parameters(Optimized)
 # ====================================================
 
-def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,translationx=0,incrementx=0.0,incrementy=0.0,translationy=0):
+def create_device(geometry_added,layer,max_edge_length,dimensions,translationx=0,incrementx=0.0,incrementy=0.0,translationy=0):
     '''
     Since we're using the same geometry, this function is implemented so we can change the dimensions of the right rectangle hence the position of the drain too : tdgl.polygon object,
     :param geometry_used: tdgl.polygon object,
@@ -135,15 +135,14 @@ def create_device(geometry_used,geometry_added,layer,max_edge_length,dimensions,
     The translations move the source and drain along the polygon
     '''
     width_x = dimensions['width_x']
-    height_y = dimensions['height_y']
+    #height_y = dimensions['height_y']
     width_x2 = dimensions['width_x2']
     height_y2 = dimensions['height_y2']
     #for points that are the same as the  film width
-    contact_size = width_x #1 µm squares
     real_size_x = width_x2 + incrementx
     real_size_y =3 + incrementy
     film_poly_up = tdgl.Polygon("film_pequeño", points=box(width=real_size_x, height= real_size_y)).translate(dx=+width_x/2)
-    combined_geometry = geometry_used.union(geometry_added,film_poly_up)
+    combined_geometry = geometry_added.union(film_poly_up)
     #Source
     source_poly = tdgl.Polygon(
         "source", 
@@ -182,6 +181,8 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
     :param current_title: String, title for the current plot
     :param currentBool: Boolean, if True plots the currents
     :param order_path: String, path to save the order parameter plot
+    :param current_path: String, path to save the current plot
+    returns: None
     '''
     #The plot_solution is only used on the 1st simulation section
     # Create figure with adjusted spacing and plot currents
@@ -221,7 +222,9 @@ def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True
     :param currentBool: Boolean, if True plots the currents
     :param titleBool: Boolean, if True uses titles for the plots
     :param order_path: String, path to save the order parameter plot
-    :param current_path: String, path to save the current plot'''
+    :param current_path: String, path to save the current plot
+    returns: None
+    '''
     if titleBool == True:
         plot_solution(solution,currentBool=currentBool,order_title=used_titles["order_parameter"],current_title=used_titles["sheet_current"],order_path=order_path,current_path=current_path)
         solution.plot_vorticity(figsize=figure_size,title=used_titles["vorticity"])
@@ -324,6 +327,16 @@ def current_application(device,currents,B_field = 0):
     return voltages
 #Possible critic currents step optimizer function
 def critic_guess(currents,voltages,delta):
+    '''
+    This function estimates the critical regions in the IV curve where the voltage changes rapidly with respect to the current.
+    It uses the gradient of the voltage with respect to the current to identify these regions based on a threshold defined by the delta parameter.
+    Parameters:
+    :param currents (np.array): Array of current values.
+    :param voltages (np.array): Array of voltage values corresponding to the currents.
+    :param delta (float): A scaling factor to determine the threshold for identifying critical regions.
+    Returns:
+    np.array: Array of critical current values where significant voltage changes occur.
+    '''
     dV_dI = np.gradient(voltages, currents)
     threshold = delta * np.max(dV_dI)
     critic_regions = currents[dV_dI > threshold]
@@ -331,12 +344,15 @@ def critic_guess(currents,voltages,delta):
     return critic_regions
 def find_critic_regions(currents,voltages,quantity=4,jo=0.5):
     '''
-    This function finds the critical regions in the IV curve where the voltage changes rapidly with respect to the current.
-    It uses the gradient of the voltage with respect to the current to identify these regions.
-    The function iteratively refines the search until it finds a manageable number of critical regions.
+    This function finds critical regions in the IV curve by iteratively adjusting a delta parameter until the desired number of critical regions is found.
+    It calls the critic_guess function to identify critical regions based on the gradient of voltage with respect to current.
     Parameters:
     :param currents (np.array): Array of current values.
     :param voltages (np.array): Array of voltage values corresponding to the currents.
+    :param quantity (int): Desired number of critical regions to find (default is 4).
+    :param jo (float): Initial delta value to start the search (default is 0.5).
+    Returns:
+    np.array: Array of critical current values where significant voltage changes occur.
     '''
     j = jo
     initial_size = quantity + 1
@@ -350,70 +366,97 @@ def find_critic_regions(currents,voltages,quantity=4,jo=0.5):
         j += 0.01
     return critic_regions
 
-def critic_currents_augmentation(device, critic_regions,current_interval, B=1.0, steps=10,critic_steps = 20):
+def critic_currents_augmentation(device, critic_regions, current_bounds, B=1.0, steps=3, critic_steps=10, epsilon=0.5):
     '''
-    A function that applies a current sweep with more defined calculations arround the critic currents to a device and returns the corresponding voltages.
-    :param device: tdgl.device object
-    :param critic_regions: List or array of current values where the critic regions are located.    
-    :param current_interval: Dictionary with the initial and final values of the current interval.
-    :param B_field: Double, optional magnetic field to be applied (default is 1.0).
-    :param steps: Integer, number of steps for the non-critic regions (default is 10).
-    :param critic_steps: Integer, number of steps for the critic regions (default is 20).
+    A function that applies a current sweep with more defined calculations around the critic currents.
+    :param current_bounds: Dictionary with "initial" and "final".
     '''
-    # the size of the interval, ex: the default interval was 0-15 microA, wich means: size= 15 and current_interval["initial"] = 0 
-    size = (current_interval["final"]-1)
-    #The epsilon that sets the total distance of the critic current interval
-    epsilon = 1
-    cr_size = np.size(critic_regions)
-    currents = []
-    voltages = []
-    for index,i in enumerate(critic_regions):
-        #These cases are defined before co and cf are updated
-      
-        if index == 0:
-            initial = current_interval["initial"]
-            final = critic_regions[index] - 0.1
-            #Accsess the first element of critic_regions hence defining the first interval
-        
-        else:
-            #retrieves the previous cf before it's updated
-            intial = cf + 0.1
-         #Define and updates the critic_currents intrvals set arround an epsilon 
-        co =  i - epsilon
-        cf =  i + epsilon
-        #calculates the next interval from left to right up to the next critic interval
-        previous_currents= np.linspace(intial,final,steps)
-        previous_voltages = current_application(device,previous_currents,B_field = B)
-        critic_currents = np.linspace(co, cf, critic_steps)
-        critic_voltages = current_application(device, critic_currents,B_field = B)
-        # Concatenate correctly the whole interval
-        current_interval = np.concatenate(previous_currents,critic_currents)
-        voltage_interval = np.concatenate(previous_voltages,critic_voltages)
-        currents = np.append(current_interval)
-        voltages = np.append(voltage_interval)
-        plot_info1 = {
-        "fig_name": "currents.jpg",
-        "title": f'Curva Voltaje vs Corriente ({initial}–{final} µA)',
-        "x": "Corriente $I$ [$\mu$A]",
-         "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
-        }
-        plot_parameters(currents, voltages, plot_info1)
-    finalInterval_currents =np.linspace(cf + 0.1,size,steps)
-    finalInterval_voltages = current_application(device,finalInterval_currents,B_field = B)
-    currents.append(finalInterval_currents)
-    voltages.append(finalInterval_voltages)
-    plot_info1 = {
-        "fig_name": "currents.jpg",
-        "title": f'Curva Voltaje vs Corriente ({current_interval[0]}–{current_interval[1]} µA)',
-        "x": "Corriente $I$ [$\mu$A]",
-         "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
-        }
     
-    plot_parameters(currents, voltages, plot_info1)
-    return currents,voltages
+    # Store the arrays chunks here, then concatenate at the end
+    all_currents_chunks = []
+    all_voltages_chunks = []
+    
+    # Start point for the sweep
+    current_cursor = current_bounds["initial"]
+    final_limit = current_bounds["final"]
+    j = 0
+    # 1. Loop through critical regions
+    for i in critic_regions:
+        # Define the critical window
+        co = i - epsilon
+        cf = i + epsilon
+        
+        # Ensure we don't go backwards if regions overlap
+        if current_cursor < co:
+            # We subtract a small offset to ensure we don't duplicate the start of the critical region
+            previous_currents = np.linspace(current_cursor, co, steps, endpoint=False)
+            
+            if len(previous_currents) > 0:
+                previous_voltages = current_application(device, previous_currents, B_field=B)
+                all_currents_chunks.append(previous_currents)
+                all_voltages_chunks.append(previous_voltages)
+        
+        # --- CRITICAL (FINE) INTERVAL ---
+        critic_currents = np.linspace(co, cf, critic_steps)
+        critic_voltages = current_application(device, critic_currents, B_field=B)
+        
+        all_currents_chunks.append(critic_currents)
+        all_voltages_chunks.append(critic_voltages)
+        j+=1
+        print(f'Critical region {j}/{np.size(critic_regions)} at I = {i:.2f} µA processed.')
+        
+        # Update the cursor to the end of this critical region
+        # Using a small offset to avoid overlapping points in the next linspace
+        current_cursor = cf
+ 
+        
+    # 2. Final Interval (after the last critical region)
+    if current_cursor < final_limit:
+        final_currents = np.linspace(current_cursor, final_limit, steps)
+        final_voltages = current_application(device, final_currents, B_field=B)
+        all_currents_chunks.append(final_currents)
+        all_voltages_chunks.append(final_voltages)
+
+    # 3. Concatenate all data
+    total_currents = np.concatenate(all_currents_chunks)
+    total_voltages = np.concatenate(all_voltages_chunks)
+    
+    # Sort the data just in case intervals overlapped or were out of order
+    sort_indices = np.argsort(total_currents)
+    total_currents = total_currents[sort_indices]
+    total_voltages = total_voltages[sort_indices]
+    
+
+    # 4. Plotting (Done once at the end)
+    plot_info = {
+        "fig_name": "currents.jpg",
+        "title": f'Curva Voltaje vs Corriente ({current_bounds["initial"]}–{current_bounds["final"]} µA)',
+        "x": "Corriente $I$ [$\mu$A]",
+        "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
+    }
+    
+    plot_parameters(total_currents, total_voltages, plot_info)
+    
+    return total_currents, total_voltages
 
 
-def varying_increments(device,currents,io,ifi,field = 0):
+def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,io,ifi,deltay = 1,field = 0):
+
+    '''
+    This function applies a current sweep to devices with varying heights and returns the corresponding voltages.
+    :param geometry_used: tdgl.polygon
+    :param geometry_added: tdgl.polygon
+    :param layer: tdgl.layer object
+    :param MAX_EDGE_LENGTH_IV: int
+    :param dimensions: dictionary with the dimensions of the device
+    :param displacement: float, translation value for the source and drain
+    :param currents: List or array of current values to be applied.
+    :param io: int, initial increment value
+    :param ifi: int, final increment value
+    :param deltay: float, optional vertical translation for the source and drain (default is 0).
+    :param field: Double, optional magnetic field to be applied (default is 0).
+    returns: voltages_arr
+    '''
     size = ifi - io +1
     voltages_arr = []
 
@@ -422,7 +465,7 @@ def varying_increments(device,currents,io,ifi,field = 0):
         deltay = h
         if h == 3:
             deltay = 4
-        device_l  =create_device(film_poly,half_geometry,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
+        device_l  =create_device(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
         fig, ax = device_l.plot(mesh=True)
         voltages =  current_application(device_l, currents,B_field = field)
         voltages_arr.append(voltages)
