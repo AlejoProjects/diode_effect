@@ -323,6 +323,33 @@ def current_application(device,currents,B_field = 0):
     print("-" * 50)
     return voltages
 #Possible critic currents step optimizer function
+def critic_guess(currents,voltages,delta):
+    dV_dI = np.gradient(voltages, currents)
+    threshold = delta * np.max(dV_dI)
+    critic_regions = currents[dV_dI > threshold]
+    #print(f'for {delta} the size is {np.size(critic_regions)}')
+    return critic_regions
+def find_critic_regions(currents,voltages,quantity=4,jo=0.5):
+    '''
+    This function finds the critical regions in the IV curve where the voltage changes rapidly with respect to the current.
+    It uses the gradient of the voltage with respect to the current to identify these regions.
+    The function iteratively refines the search until it finds a manageable number of critical regions.
+    Parameters:
+    :param currents (np.array): Array of current values.
+    :param voltages (np.array): Array of voltage values corresponding to the currents.
+    '''
+    j = jo
+    initial_size = quantity + 1
+    critic_regions = np.empty(initial_size)
+    while np.size(critic_regions) > quantity:
+        if (np.size(critic_regions) - quantity) < 0.1 and (np.size(critic_regions) - quantity) > 0:
+            break
+        if j == 1:
+            break
+        critic_regions = critic_guess(currents,voltages,j)
+        j += 0.01
+    return critic_regions
+
 def critic_currents_augmentation(device, critic_regions,current_interval, B=1.0, steps=10,critic_steps = 20):
     '''
     A function that applies a current sweep with more defined calculations arround the critic currents to a device and returns the corresponding voltages.
