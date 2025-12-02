@@ -440,7 +440,7 @@ def critic_currents_augmentation(device, critic_regions, current_bounds, B=1.0, 
     return total_currents, total_voltages
 
 
-def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,io,ifi,deltay = 1,field = 0):
+def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,deltay = 1,field = 1.0):
 
     '''
     This function applies a current sweep to devices with varying heights and returns the corresponding voltages.
@@ -451,28 +451,16 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
     :param dimensions: dictionary with the dimensions of the device
     :param displacement: float, translation value for the source and drain
     :param currents: List or array of current values to be applied.
-    :param io: int, initial increment value
-    :param ifi: int, final increment value
     :param deltay: float, optional vertical translation for the source and drain (default is 0).
     :param field: Double, optional magnetic field to be applied (default is 0).
     returns: voltages_arr
     '''
-    size = ifi - io +1
-    voltages_arr = []
-
-    J = 0
-    for h in range(io,ifi):      
-        deltay = h
-        if h == 3:
-            deltay = 4
-        device_l  =create_device(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
-        fig, ax = device_l.plot(mesh=True)
-        voltages =  current_application(device_l, currents,B_field = field)
-        voltages_arr.append(voltages)
-        J+= 1
-        print(f'progress: {np.round((J/size)*100,3)}')
-    print(voltages_arr)
-    return voltages_arr
+    if deltay == 4:
+        deltay = 5
+    device_l  =create_device(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
+    fig, ax = device_l.plot(mesh=True)
+    voltages =  current_application(device_l, currents,B_field = field)
+    return voltages
 
         
 
