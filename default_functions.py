@@ -486,7 +486,8 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
     device_l  =create_device(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
     fig, ax = device_l.plot(mesh=True)
     voltages =  current_application(device_l, currents,B_field = field)
-    return voltages
+    resistance = find_resistance(currents,voltages)
+    return voltages,resistance
 
         
 
