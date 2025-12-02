@@ -69,7 +69,7 @@ def default_options(d_filename,skip_t=200,solve_t=200,saves=200):
     )
     return options
     
-def default_solution(device,file_name,vector_potential=0,terminal_currents_applied=[0,0]):
+def default_solution(device,file_name,terminal_currents_applied,vector_potential=0):
     '''
     This function allows the user to apply different solution cases based on the applied current/field 
     :param device: tdgl.device object
@@ -83,7 +83,7 @@ def default_solution(device,file_name,vector_potential=0,terminal_currents_appli
     solution = tdgl.solve(
          device,
          options,
-         terminal_currents= dict(source=terminal_currents_applied[0],drain=terminal_currents_applied[1]),
+         terminal_currents= terminal_currents_applied,
          applied_vector_potential=external_field
         )
     return solution
@@ -255,12 +255,15 @@ def solve_field(device,field,d=0.1):
     moments = [] #total magnetic moment
     magnetizations = []  # volumetric magnetization
     # Loop for each value of B
-
+    currents = {
+        "source": 0.0,
+        "drain": 0.0
+    }
     with tempfile.TemporaryDirectory() as temp_dir:
         for B in field:
             # Creates a uniform magnetic field of magnitude B
             # Solves Ginzburg–Landau equations with an applied field
-            solution_field= default_solution(device,"Bscan.h5",vector_potential=B,terminal_currents_applied=[0.0,0.0])
+            solution_field= default_solution(device,"Bscan.h5",vector_potential=B,terminal_currents_applied=currents)
             #Calculates total magnetic moment (uA · µm²) 
             m = solution_field.magnetic_moment(units="uA * um**2", with_units=False)
             moments.append(m)  # Almacena el valor
@@ -280,7 +283,18 @@ def solve_field(device,field,d=0.1):
     np.savetxt("magnetization_vs_B.txt", np.column_stack((field, magnetizations)),header="B[mT] M[uA/um^3]")
     np.savetxt("suceptibilidad_rr_vs_B.txt", np.column_stack((field, suceptibility)),header="B[mT] dM/dB [uA/(um^3·mT)]")
     return moments,magnetizations, suceptibility
-
+def find_resistance(currents,voltages):
+    '''
+    This function calculates the resistance at each point in the IV curve by computing the gradient of voltage with respect to current.
+    Parameters:
+    :param currents (np.array): Array of current values.
+    :param voltages (np.array): Array of voltage values corresponding to the currents.
+    Returns:
+    np.array: Array of resistance values calculated as dV/dI.
+    '''
+    dV_dI = np.gradient(voltages, currents)
+    return dV_dI
+    
 def current_application(device,currents,B_field = 0):
     '''
     A function that applies a current sweep to a device and returns the corresponding voltages.
@@ -299,11 +313,15 @@ def current_application(device,currents,B_field = 0):
     j=0
     with tempfile.TemporaryDirectory() as temp_dir:
         for I in currents:
+            applied_currents = {
+                "source": I,
+                "drain": -I
+            }
             solution_c = default_solution(
             device,
             f"solution_I_{I:.1f}.h5",
             vector_potential=B_field,
-            terminal_currents_applied=[I, -I],
+            terminal_currents_applied=applied_currents,
            )
             dynamics = solution_c.dynamics
             indices = dynamics.time_slice(tmin=120)
@@ -312,7 +330,7 @@ def current_application(device,currents,B_field = 0):
             j+=1
             print(f"I = {I:.1f} µA, <V> = {voltage:.4f} V₀,progress: {np.round(j/np.size(currents)*100,2)}%", end='\r')
         
-  
+    resistances = find_resistance(currents,voltages)
     clear_output(wait=True)
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -324,8 +342,9 @@ def current_application(device,currents,B_field = 0):
     print(f"⏱️ The elapsed time was: {elapsed_minutes:.2f} minutes.")
     print(f"📊 Tiempo mean time per step was: {(elapsed_time / total_simulations):.2f} seconds.")
     print("-" * 50)
-    return voltages
+    return voltages,resistances
 #Possible critic currents step optimizer function
+
 def critic_guess(currents,voltages,delta):
     '''
     This function estimates the critical regions in the IV curve where the voltage changes rapidly with respect to the current.
@@ -337,11 +356,12 @@ def critic_guess(currents,voltages,delta):
     Returns:
     np.array: Array of critical current values where significant voltage changes occur.
     '''
-    dV_dI = np.gradient(voltages, currents)
+    dV_dI = find_resistance(currents,voltages)
     threshold = delta * np.max(dV_dI)
     critic_regions = currents[dV_dI > threshold]
     #print(f'for {delta} the size is {np.size(critic_regions)}')
     return critic_regions
+
 def find_critic_regions(currents,voltages,quantity=4,jo=0.5):
     '''
     This function finds critical regions in the IV curve by iteratively adjusting a delta parameter until the desired number of critical regions is found.
@@ -434,10 +454,16 @@ def critic_currents_augmentation(device, critic_regions, current_bounds, B=1.0, 
         "x": "Corriente $I$ [$\mu$A]",
         "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
     }
-    
+    plot_info2 = {
+        "fig_name": "resistances.jpg",
+        "title": f'Resistencia vs Corriente ({current_bounds["initial"]}–{current_bounds["final"]} µA)',
+        "x": "Corriente $I$ [$\mu$A]",
+        "y": "Resistencia $dV/dI$ [$R_0$]"
+    }
+    total_resistance = find_resistance(total_currents, total_voltages)
     plot_parameters(total_currents, total_voltages, plot_info)
-    
-    return total_currents, total_voltages
+    plot_parameters(total_currents, total_resistance, plot_info2)
+    return total_currents, total_voltages,total_resistance
 
 
 def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,deltay = 1,field = 1.0):
