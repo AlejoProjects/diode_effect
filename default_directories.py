@@ -42,3 +42,5 @@ def clean_directory(directory):
         import shutil
         shutil.rmtree(directory)
         os.makedirs(directory)
+def save_data(data,file_path, column_titles):
+    np.savetxt(file_path, np.column_stack((data[0],data[1])),header=column_titles)
