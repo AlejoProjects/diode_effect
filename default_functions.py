@@ -237,7 +237,7 @@ def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True
 # =========================
 # 5) Magnetization function
 # =========================
-def solve_field(device,field,d=0.1):
+def solve_field(device,field,file_path,d=0.1):
     '''
     A function that applies a magnetic field sweep to a device and returns the corresponding magnetizations and magnetic moments.
     
@@ -280,8 +280,10 @@ def solve_field(device,field,d=0.1):
     # =========================
     # 5)Save data on files
     # =========================
-    np.savetxt("magnetization_vs_B.txt", np.column_stack((field, magnetizations)),header="B[mT] M[uA/um^3]")
-    np.savetxt("suceptibilidad_rr_vs_B.txt", np.column_stack((field, suceptibility)),header="B[mT] dM/dB [uA/(um^3·mT)]")
+    mag_path = os.path.join(file_path,"magnetization_vs_B.txt")
+    susc_path = os.path.join(file_path,"suceptibilidad_vs_B.txt")
+    np.savetxt(mag_path, np.column_stack((field, magnetizations)),header="B[mT] M[uA/um^3]")
+    np.savetxt(susc_path, np.column_stack((field, suceptibility)),header="B[mT] dM/dB [uA/(um^3·mT)]")
     return moments,magnetizations, suceptibility
 def find_resistance(currents,voltages):
     '''
