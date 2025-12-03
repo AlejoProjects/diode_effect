@@ -165,7 +165,7 @@ def create_device(geometry_added,layer,max_edge_length,dimensions,translationx=0
     fig, ax = device.draw(figsize=(10, 4))
     return device
 
-def visualize_segments(device):
+def visualize_segments(device,view=True):
     """
     Plots the device boundary with numbered segments and returns the segment list.
     """
@@ -176,35 +176,35 @@ def visualize_segments(device):
 
     # 2. Identify Sides
     segments = segment_boundary(points)
-
-    # 3. Plot
-    fig, ax = plt.subplots(figsize=(8, 8))
-    device.plot(ax=ax, mesh=False, legend=False)
-    
-    for i, seg in enumerate(segments):
-        # Calculate Label Position
-        mid_idx = len(seg['points']) // 2
-        mid_pt = seg['points'][mid_idx]
+    if view == True:
+        # 3. Plot
+        fig, ax = plt.subplots(figsize=(8, 8))
+        device.plot(ax=ax, mesh=False, legend=False)
         
-        if seg['type'] == 'circle':
-            vec = mid_pt - seg['center']
-            norm_vec = vec / np.linalg.norm(vec)
-        else:
-            p1 = seg['points'][0]
-            p2 = seg['points'][-1]
-            tangent = p2 - p1
-            norm_vec = np.array([-tangent[1], tangent[0]]) 
-            norm_vec /= (np.linalg.norm(norm_vec) + 1e-9)
+        for i, seg in enumerate(segments):
+            # Calculate Label Position
+            mid_idx = len(seg['points']) // 2
+            mid_pt = seg['points'][mid_idx]
+            
+            if seg['type'] == 'circle':
+                vec = mid_pt - seg['center']
+                norm_vec = vec / np.linalg.norm(vec)
+            else:
+                p1 = seg['points'][0]
+                p2 = seg['points'][-1]
+                tangent = p2 - p1
+                norm_vec = np.array([-tangent[1], tangent[0]]) 
+                norm_vec /= (np.linalg.norm(norm_vec) + 1e-9)
 
-        label_pos = mid_pt + (norm_vec * 0.5) 
-        
-        color = 'blue' if seg['type'] == 'line' else 'red'
-        ax.plot(seg['points'][:,0], seg['points'][:,1], color=color, linewidth=2)
-        ax.text(label_pos[0], label_pos[1], str(i), fontsize=12, color='white', 
-                bbox=dict(facecolor='black', alpha=0.7, boxstyle='round'))
+            label_pos = mid_pt + (norm_vec * 0.5) 
+            
+            color = 'blue' if seg['type'] == 'line' else 'red'
+            ax.plot(seg['points'][:,0], seg['points'][:,1], color=color, linewidth=2)
+            ax.text(label_pos[0], label_pos[1], str(i), fontsize=12, color='white', 
+                    bbox=dict(facecolor='black', alpha=0.7, boxstyle='round'))
 
-    plt.title(f"Device Geometry: Found {len(segments)} segments")
-    plt.show()
+        plt.title(f"Device Geometry: Found {len(segments)} segments")
+        plt.show()
     
     # Return the segments so the next function can use them
     return segments
@@ -678,8 +678,8 @@ def current_application(device,currents,file_path,B_field = 0):
         for I in currents:
             filename = f'solution_I_{I:.1f}.h5'
             applied_currents = {
-                "source": I,
-                "drain": -I
+                "term_s": I,
+                "term_d": -I
             }
             solution_c = default_solution(
             device,
@@ -859,7 +859,7 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
         {"id": 8,  "name": "s"},
         {"id": 2, "name": "d"}
     ]
-    segments_found = visualize_segments(device_l)
+    segments_found = visualize_segments(device_l,view = False)
 
 # 3. Create the device
 # This will now work and place probes at the first 2 terminals automatically
