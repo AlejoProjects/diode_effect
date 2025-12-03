@@ -18,12 +18,12 @@ def create_default_directories():
     ####################################################
     #Subdirectories created here                        #
     ####################################################
-    subsection21_dir = section2_dir + "/_21_constant_field_fixed_current"
-    subsection22_dir = section2_dir + "/_22_varying_field_zero_current"
-    subsection23_dir = section2_dir + "/_23_fixed_field_zero_current_different_heights"
-    subsection41_dir = section4_dir + "/_41_constant_field"
-    subsection42_dir = section4_dir + "/_42_constant_field_different_heights"
-    subsection43_dir = section4_dir + "/_43_different_fields"
+    subsection21_dir = section2_dir + "/21_constant_field_fixed_current"
+    subsection22_dir = section2_dir + "/22_varying_field_zero_current"
+    subsection23_dir = section2_dir + "/23_fixed_field_zero_current_different_heights"
+    subsection41_dir = section4_dir + "/41_constant_field"
+    subsection42_dir = section4_dir + "/42_constant_field_different_heights"
+    subsection43_dir = section4_dir + "/43_different_fields"
     check_create_dir(subsection21_dir)
     check_create_dir(subsection22_dir)
     check_create_dir(subsection23_dir)

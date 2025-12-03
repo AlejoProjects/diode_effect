@@ -1,4 +1,5 @@
 from tdgl.visualization.animate import create_animation
+from shapely.geometry import LineString, Point
 from IPython.display import HTML, display
 from IPython.display import clear_output
 from tdgl.sources import ConstantField
@@ -11,6 +12,9 @@ import h5py
 import tdgl
 import time
 import os
+
+
+
 ###################################################################
 #This script contains the default parameters and functions used in the notebook.#
 ###################################################################
@@ -39,9 +43,15 @@ SMOOTHING_STEPS = 100
 # ====================================================
 ## 2. ⚙️ videos and default functions
 # ====================================================  
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-MAKE_ANIMATIONS = True
+
 tempdir = tempfile.TemporaryDirectory()
+H5_DIR = "./project_field_h5_files"
+os.makedirs(H5_DIR, exist_ok=True)
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+# Configuración de gráficas
+plt.rcParams["figure.figsize"] = (8, 6)
+plt.rcParams.update({'figure.autolayout': True})
+plt.rcParams['lines.linewidth'] = 2.0
 def make_video_from_solution(
     solution,
     quantities=("order_parameter", "phase"),
@@ -91,16 +101,8 @@ def default_solution(device,file_name,terminal_currents_applied,vector_potential
 # ====================================================
 # 3.)Default configuration
 # ====================================================
-H5_DIR = "./project_field_h5_files"
-os.makedirs(H5_DIR, exist_ok=True)
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-# Configuración de gráficas
-plt.rcParams["figure.figsize"] = (8, 6)
-plt.rcParams.update({'figure.autolayout': True})
-plt.rcParams['lines.linewidth'] = 2.0
-# ====================================================
-# 4.)Device Creation Function
-# ====================================================
+
+
 def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_path = None):
     plt.figure(figsize=(6, 4))
     if plot_type == "plot":
@@ -118,10 +120,12 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_
         plt.savefig(dir_path)
     plt.show()
 
-# ====================================================
-## 4. ⚙️ Global Parameters(Optimized)
-# ====================================================
 
+# #################################################################################
+# =================================================================================
+## Device functions 
+# =================================================================================
+# #################################################################################
 def create_device(geometry_added,layer,max_edge_length,dimensions,translationx=0,incrementx=0.0,incrementy=0.0,translationy=0):
     '''
     Since we're using the same geometry, this function is implemented so we can change the dimensions of the right rectangle hence the position of the drain too : tdgl.polygon object,
@@ -137,7 +141,7 @@ def create_device(geometry_added,layer,max_edge_length,dimensions,translationx=0
     The translations move the source and drain along the polygon
     '''
     width_x = dimensions['width_x']
-    #height_y = dimensions['height_y']
+
     width_x2 = dimensions['width_x2']
     height_y2 = dimensions['height_y2']
     #for points that are the same as the  film width
@@ -145,35 +149,389 @@ def create_device(geometry_added,layer,max_edge_length,dimensions,translationx=0
     real_size_y =3 + incrementy
     film_poly_up = tdgl.Polygon("film_pequeño", points=box(width=real_size_x, height= real_size_y)).translate(dx=+width_x/2)
     combined_geometry = geometry_added.union(film_poly_up)
-    #Source
-    source_poly = tdgl.Polygon(
-        "source", 
-        points=box(width=STRIPE_LENGTH,height=height_y2)
-    ).translate(dx=-translationx).translate(dy=translationy)
-    #Drain 
-    drain_poly = tdgl.Polygon(
-        "drain", 
-        points=box(width=STRIPE_LENGTH, height=real_size_y)
-    ).translate(dx=+translationx+incrementx/2).translate(dy=+translationy)
-    combined_film = tdgl.Polygon.from_union([combined_geometry, source_poly, drain_poly], name="film")
-    probe_points = [(width_x / 3,0), (-width_x / 3,0)]
+    combined_film = combined_geometry
     device = tdgl.Device(
         "vertical_bridge",
         layer=layer,
         film=combined_film,
         holes=[],
-        terminals=[source_poly, drain_poly],
-        probe_points=probe_points,
         length_units=LENGTH_UNITS,
     )
     device.make_mesh(max_edge_length=max_edge_length, smooth=SMOOTHING_STEPS)
-    #Remove to se more details about the mesh 
-    #There are 4 malformed cells as of now , 4/5030 
+    #Remove to se more details about the mesh
+    #There are 4 malformed cells as of now , 4/5030
     clear_output(wait=True)
     print(f"  Malla creada: {len(device.mesh.sites)} puntos")
     fig, ax = device.draw(figsize=(10, 4))
     return device
 
+def visualize_segments(device):
+    """
+    Plots the device boundary with numbered segments and returns the segment list.
+    """
+    # 1. Extract shell
+    points = device.film.points
+    if not np.array_equal(points[0], points[-1]):
+        points = np.vstack([points, points[0]])
+
+    # 2. Identify Sides
+    segments = segment_boundary(points)
+
+    # 3. Plot
+    fig, ax = plt.subplots(figsize=(8, 8))
+    device.plot(ax=ax, mesh=False, legend=False)
+    
+    for i, seg in enumerate(segments):
+        # Calculate Label Position
+        mid_idx = len(seg['points']) // 2
+        mid_pt = seg['points'][mid_idx]
+        
+        if seg['type'] == 'circle':
+            vec = mid_pt - seg['center']
+            norm_vec = vec / np.linalg.norm(vec)
+        else:
+            p1 = seg['points'][0]
+            p2 = seg['points'][-1]
+            tangent = p2 - p1
+            norm_vec = np.array([-tangent[1], tangent[0]]) 
+            norm_vec /= (np.linalg.norm(norm_vec) + 1e-9)
+
+        label_pos = mid_pt + (norm_vec * 0.5) 
+        
+        color = 'blue' if seg['type'] == 'line' else 'red'
+        ax.plot(seg['points'][:,0], seg['points'][:,1], color=color, linewidth=2)
+        ax.text(label_pos[0], label_pos[1], str(i), fontsize=12, color='white', 
+                bbox=dict(facecolor='black', alpha=0.7, boxstyle='round'))
+
+    plt.title(f"Device Geometry: Found {len(segments)} segments")
+    plt.show()
+    
+    # Return the segments so the next function can use them
+    return segments
+def add_terminals_by_id(device, segments, source_id, drain_id, layer, max_edge_length, width_pct=100, stripe_length=0.01, probe_depth=0.5):
+    """
+    Creates a new device with terminals added at specified segments.
+    Automatically positions probe points near the new terminals.
+    
+    :param stripe_length: Thickness of the terminal (0.01).
+    :param probe_depth: How far inside the film to place the probes (in um).
+    """
+    new_terminals = list(device.terminals)
+    
+    if source_id >= len(segments) or drain_id >= len(segments):
+        raise ValueError(f"IDs must be less than {len(segments)}")
+
+    # --- 1. Create Source ---
+    seg_s = segments[source_id]
+    term_s = create_terminal_from_segment(seg_s, "_new_source", pct=width_pct, stripe_length=stripe_length)
+    new_terminals.append(term_s)
+    
+    # Calculate Probe 1 (Source Side)
+    probe_s = get_inward_probe_point(seg_s, depth=probe_depth)
+    
+    # --- 2. Create Drain ---
+    seg_d = segments[drain_id]
+    term_d = create_terminal_from_segment(seg_d, "_new_drain", pct=width_pct, stripe_length=stripe_length)
+    new_terminals.append(term_d)
+    
+    # Calculate Probe 2 (Drain Side)
+    probe_d = get_inward_probe_point(seg_d, depth=probe_depth)
+
+    # --- 3. Update Device Probe Points ---
+    # We replace the old probes with these new ones tailored to the current path
+    new_probes = np.array([probe_s, probe_d])
+
+    # --- 4. Reconstruct Device ---
+    new_film_parts = [device.film] + new_terminals
+    new_film = tdgl.Polygon.from_union(new_film_parts, name="film_with_new_terminals")
+
+    new_device = tdgl.Device(
+        f"{device.name}_expanded",
+        layer=layer,
+        film=new_film,
+        holes=device.holes,
+        terminals=new_terminals,
+        probe_points=new_probes, # <--- Updated here
+        length_units=device.length_units
+    )
+    
+    print(f"Remeshing with stripe_length={stripe_length} and probe_depth={probe_depth}...")
+    new_device.make_mesh(max_edge_length=max_edge_length, smooth=100)
+    
+    return new_device
+
+
+def segment_boundary(points, angle_tol=1.0, curve_tol=0.05):
+    """
+    Divides a list of points into geometric segments (Linear or Circular).
+    """
+    segments = []
+    if len(points) < 2: return segments
+
+    current_segment = [points[0]]
+    
+    # We iterate through points and check if the 'next' vector maintains the current trend
+    # This is a simplified vector analysis.
+    
+    for i in range(1, len(points) - 1):
+        p_prev = points[i-1]
+        p_curr = points[i]
+        p_next = points[i+1]
+        
+        current_segment.append(p_curr)
+        
+        # Analyze vectors
+        v1 = p_curr - p_prev
+        v2 = p_next - p_curr
+        
+        # Angles in degrees
+        ang1 = np.degrees(np.arctan2(v1[1], v1[0]))
+        ang2 = np.degrees(np.arctan2(v2[1], v2[0]))
+        
+        diff = abs(ang1 - ang2)
+        if diff > 180: diff = 360 - diff
+        
+        # If angle changes significantly, the segment *might* be ending or it's a curve
+        if diff > angle_tol:
+            # If the current segment has enough points, we determine its type
+            # For this logic, we break whenever there is a sharp corner.
+            # Curves in TDGL polygons are usually many small segments with small angle changes.
+            # If the change is abrupt (>30 deg), it's definitely a corner.
+            if diff > 20: 
+                segments.append(classify_segment(np.array(current_segment)))
+                current_segment = [p_curr] # Start new segment from corner
+
+    # Add the last bit
+    current_segment.append(points[-1])
+    segments.append(classify_segment(np.array(current_segment)))
+    
+    # Post-process: Merge continuous small curve segments if needed, 
+    # but for standard TDGL polygons defined by boxes, this is usually sufficient.
+    return segments
+
+def classify_segment(pts):
+    """Determines if points form a line or a circle arc."""
+    if len(pts) <= 2:
+        return {'type': 'line', 'points': pts, 'length': np.linalg.norm(pts[-1]-pts[0]), 'angle': get_line_angle(pts)}
+    
+    # Check linearity: distance of mid points to the line connecting start-end
+    p_start = pts[0]
+    p_end = pts[-1]
+    line_vec = p_end - p_start
+    line_len = np.linalg.norm(line_vec)
+    if line_len == 0: return {'type': 'point', 'points': pts}
+    
+    line_unit = line_vec / line_len
+    
+    # Max deviation from straight line
+    deviations = []
+    for p in pts:
+        vec_p = p - p_start
+        proj = np.dot(vec_p, line_unit)
+        perp_dist = np.linalg.norm(vec_p - proj * line_unit)
+        deviations.append(perp_dist)
+        
+    if max(deviations) < 1e-3: # It's a line
+         return {'type': 'line', 'points': pts, 'length': line_len, 'angle': get_line_angle(pts)}
+    else:
+        # It's likely a curve/circle
+        # Fit a circle (simplified: circumcenter of start, mid, end)
+        mid = pts[len(pts)//2]
+        center, radius = define_circle(p_start, mid, p_end)
+        return {'type': 'circle', 'points': pts, 'center': center, 'radius': radius}
+
+def get_line_angle(pts):
+    """Returns angle of a line segment."""
+    d = pts[-1] - pts[0]
+    return np.degrees(np.arctan2(d[1], d[0]))
+
+def define_circle(p1, p2, p3):
+    """Find center and radius from 3 points."""
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    D = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+    if abs(D) < 1e-9: return np.array([0,0]), 0 # Collinear
+    Ux = ((x1**2 + y1**2) * (y2 - y3) + (x2**2 + y2**2) * (y3 - y1) + (x3**2 + y3**2) * (y1 - y2)) / D
+    Uy = ((x1**2 + y1**2) * (x3 - x2) + (x2**2 + y2**2) * (x1 - x3) + (x3**2 + y3**2) * (x2 - x1)) / D
+    center = np.array([Ux, Uy])
+    radius = np.linalg.norm(center - p1)
+    return center, radius
+def create_terminal_from_segment(segment, name_suffix, pct=100, stripe_length=0.01):
+    """
+    Creates a terminal extension attached to the segment with a fixed stripe_length.
+    """
+    pts = segment['points']
+    p_start = pts[0]
+    p_end = pts[-1]
+    
+    # 1. Determine size scaling (width along the edge)
+    if pct < 100:
+        center_line = (p_start + p_end) / 2
+        vec = (p_end - p_start)
+        half_vec = vec * (pct / 200.0) 
+        p_start = center_line - half_vec
+        p_end = center_line + half_vec
+
+    # 2. Determine Outward Normal
+    segment_mid = (p_start + p_end) / 2
+    
+    if segment['type'] == 'line':
+        tangent = p_end - p_start
+        # Rotate 90 degrees to get a normal
+        normal = np.array([-tangent[1], tangent[0]]) 
+        normal = normal / np.linalg.norm(normal)
+        
+        # Ensure normal points OUTWARD (away from center 0,0)
+        # We assume the device is centered roughly at (0,0)
+        if np.dot(normal, segment_mid) < 0:
+            normal = -normal
+            
+        # Extrude by exactly STRIPE_LENGTH
+        extrusion = normal * stripe_length 
+        
+        # Create box points
+        t_pts = [
+            p_start,
+            p_end,
+            p_end + extrusion,
+            p_start + extrusion
+        ]
+        
+    elif segment['type'] == 'circle':
+        center = segment['center']
+        radius = segment['radius']
+        # Extrude outward radially by STRIPE_LENGTH
+        r_out = radius + stripe_length
+        
+        ang_start = np.arctan2(p_start[1]-center[1], p_start[0]-center[0])
+        ang_end = np.arctan2(p_end[1]-center[1], p_end[0]-center[0])
+        
+        num_arc_pts = len(pts)
+        theta = np.linspace(ang_start, ang_end, num_arc_pts)
+        
+        outer_arc = []
+        for t in theta:
+            outer_arc.append(center + np.array([np.cos(t), np.sin(t)]) * r_out)
+        outer_arc = np.array(outer_arc)
+        
+        t_pts = np.vstack([pts, outer_arc[::-1]])
+
+    return tdgl.Polygon(f"term{name_suffix}", points=t_pts)
+def get_inward_probe_point(segment, depth=1.0):
+    """
+    Calculates a point 'depth' units inside the device from the segment center.
+    """
+    pts = segment['points']
+    p_start = pts[0]
+    p_end = pts[-1]
+    segment_mid = (p_start + p_end) / 2
+    
+    if segment['type'] == 'line':
+        tangent = p_end - p_start
+        normal = np.array([-tangent[1], tangent[0]])
+        normal = normal / np.linalg.norm(normal)
+        
+        # We want the INWARD normal (towards 0,0)
+        # If dot product is positive, it points outward, so flip it
+        if np.dot(normal, segment_mid) > 0:
+            normal = -normal
+            
+        return segment_mid + (normal * depth)
+        
+    elif segment['type'] == 'circle':
+        # Move radially towards the center
+        center = segment['center']
+        vec_to_arc = segment_mid - center
+        vec_unit = vec_to_arc / np.linalg.norm(vec_to_arc)
+        # Move backwards (inward) from the arc
+        return segment_mid - (vec_unit * depth)
+def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_length, width_pct=100, stripe_length=0.01, central_probe_separation=3.0):
+    """
+    Adds multiple terminals and REPLACES existing probes with exactly 2 central probes.
+    """
+    new_terminals = list(device.terminals)
+    
+    # Store centroids for flow calculation
+    source_centers = []
+    drain_centers = []
+    
+    # 1. Add All Requested Terminals
+    for config in terminal_configs:
+        seg_id = config['id']
+        name_suffix = f"_{config['name']}"
+        
+        if seg_id >= len(segments):
+            print(f"Warning: Segment ID {seg_id} out of range. Skipping.")
+            continue
+
+        seg = segments[seg_id]
+        
+        # Create Terminal Polygon
+        term_poly = create_terminal_from_segment(
+            seg, 
+            name_suffix, 
+            pct=width_pct, 
+            stripe_length=stripe_length
+        )
+        new_terminals.append(term_poly)
+        
+        # Collect positions
+        pts = seg['points']
+        seg_center = (pts[0] + pts[-1]) / 2
+        
+        if 'source' in config['name'].lower():
+            source_centers.append(seg_center)
+        elif 'drain' in config['name'].lower():
+            drain_centers.append(seg_center)
+
+    # 2. Smart Probe Placement (Central Intersection)
+    all_points = np.vstack([s['points'] for s in segments])
+    device_center = np.mean(all_points, axis=0)
+    
+    # Calculate Flow Direction
+    if source_centers and drain_centers:
+        avg_source = np.mean(source_centers, axis=0)
+        avg_drain = np.mean(drain_centers, axis=0)
+        flow_vec = avg_drain - avg_source
+        flow_dist = np.linalg.norm(flow_vec)
+        flow_dir = flow_vec / flow_dist if flow_dist > 0 else np.array([1, 0])
+    else:
+        flow_dir = np.array([1, 0]) 
+
+    # Place probes
+    p1 = device_center - (flow_dir * (central_probe_separation*0.7))
+    p2 = device_center + (flow_dir * (central_probe_separation*0.7))
+    
+    # THIS is the key: we only put these 2 into the array
+    final_probes = np.array([p1, p2])
+
+    # 3. Reconstruct Device
+    new_film_parts = [device.film] + new_terminals
+    new_film = tdgl.Polygon.from_union(new_film_parts, name="film_with_extra_terminals")
+
+    new_device = tdgl.Device(
+        f"{device.name}_multi_term",
+        layer=layer,
+        film=new_film,
+        holes=device.holes,
+        terminals=new_terminals,
+        probe_points=final_probes,
+        length_units=device.length_units
+    )
+    
+    # 4. Remesh & Plot
+    print(f"Remeshing... Probes placed {central_probe_separation}um apart at center.")
+    new_device.make_mesh(max_edge_length=max_edge_length, smooth=100)
+    
+    fig, ax = new_device.plot(mesh=True)
+  
+    return new_device
+
+
+# =================================================================================
+## Simulation functions 
+# ================================================================================
 
 def plot_solution(solution,order_title = None,current_title = None,currentBool = True,order_path= None,current_path= None):
     '''
@@ -318,13 +676,14 @@ def current_application(device,currents,file_path,B_field = 0):
     j=0
     with tempfile.TemporaryDirectory() as temp_dir:
         for I in currents:
+            filename = f"solution_I_{I:.1f}.h5"
             applied_currents = {
                 "source": I,
                 "drain": -I
             }
             solution_c = default_solution(
             device,
-            f"solution_I_{I:.1f}.h5",
+            filename,
             vector_potential=B_field,
             terminal_currents_applied=applied_currents,
            )
@@ -334,7 +693,8 @@ def current_application(device,currents,file_path,B_field = 0):
             voltages.append(voltage)
             j+=1
             print(f"I = {I:.1f} µA, <V> = {voltage:.4f} V₀,progress: {np.round(j/np.size(currents)*100,2)}%", end='\r')
-        
+            if os.path.exists(filename):
+                     os.remove(filename)
     resistances = find_resistance(currents,voltages)
     dd.save_data((currents,voltages),file_path,"currents(µA)  Voltages(V0)")
     dd.save_data((currents,resistances),file_path ,"currents(µA)  resistances(R0)")
