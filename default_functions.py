@@ -44,7 +44,7 @@ SMOOTHING_STEPS = 100
 ## 2. ⚙️ videos and default functions
 # ====================================================  
 
-tempdir = tempfile.TemporaryDirectory()
+tempdir = tempfile.TemporaryDirectory(prefix='electro2_')
 H5_DIR = "./project_field_h5_files"
 os.makedirs(H5_DIR, exist_ok=True)
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -157,11 +157,11 @@ def create_device(geometry_added,layer,max_edge_length,dimensions,translationx=0
         holes=[],
         length_units=LENGTH_UNITS,
     )
-    device.make_mesh(max_edge_length=max_edge_length, smooth=SMOOTHING_STEPS)
+    #device.make_mesh(max_edge_length=max_edge_length, smooth=SMOOTHING_STEPS)
     #Remove to se more details about the mesh
     #There are 4 malformed cells as of now , 4/5030
     clear_output(wait=True)
-    print(f"  Malla creada: {len(device.mesh.sites)} puntos")
+    #print(f"  Malla creada: {len(device.mesh.sites)} puntos")
     fig, ax = device.draw(figsize=(10, 4))
     return device
 
@@ -620,7 +620,7 @@ def solve_field(device,field,file_path,d=0.1):
         "source": 0.0,
         "drain": 0.0
     }
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="electro2_", suffix="_data") as temp_dir:
         for B in field:
             # Creates a uniform magnetic field of magnitude B
             # Solves Ginzburg–Landau equations with an applied field
@@ -674,9 +674,9 @@ def current_application(device,currents,file_path,B_field = 0):
     start_time = time.time()
     total_simulations = len(currents)
     j=0
-    with tempfile.TemporaryDirectory() as temp_dir:
+    with tempfile.TemporaryDirectory(prefix='electro2_') as temp_dir:
         for I in currents:
-            filename = f"solution_I_{I:.1f}.h5"
+            filename = f'solution_I_{I:.1f}.h5'
             applied_currents = {
                 "source": I,
                 "drain": -I
@@ -851,8 +851,27 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
     if deltay == 4:
         deltay = 5
     device_l  =create_device(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
-    fig, ax = device_l.plot(mesh=True)
-    voltages,resistance =  current_application(device_l, currents,file_path,B_field = field)
+    
+# 2. Define your list of terminals
+# Example: A 4-terminal measurement setup
+
+    my_terminals = [
+        {"id": 8,  "name": "s"},
+        {"id": 2, "name": "d"}
+    ]
+    segments_found = visualize_segments(device_l)
+
+# 3. Create the device
+# This will now work and place probes at the first 2 terminals automatically
+    device_final = add_multiple_terminals(
+        device_l, 
+        segments_found, 
+        my_terminals, 
+        layer, 
+        MAX_EDGE_LENGTH_IV,
+        stripe_length=STRIPE_LENGTH
+    )
+    voltages,resistance =  current_application(device_final, currents,file_path,B_field = field)
     return voltages,resistance
 
         
