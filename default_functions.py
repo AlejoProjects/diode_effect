@@ -3,6 +3,7 @@ from IPython.display import HTML, display
 from IPython.display import clear_output
 from tdgl.sources import ConstantField
 from tdgl.geometry import box, circle
+import default_directories as dd
 import matplotlib.pyplot as plt
 import numpy as np
 import tempfile
@@ -113,9 +114,10 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_
     plt.ylabel(plot_labels["y"])
     plt.title(plot_labels["title"])
     plt.grid(True)
-    plt.show()
     if dir_path != None:
         plt.savefig(dir_path)
+    plt.show()
+
 # ====================================================
 ## 4. ⚙️ Global Parameters(Optimized)
 # ====================================================
@@ -197,9 +199,10 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
             _ = solution.plot_currents(ax=axes[1],title = current_title)  
         plt.subplots_adjust(wspace=0.4)  # Increase horizontal space between subplots
         plt.tight_layout()  # Automatically adjusts subplots to fit in figure
-        plt.show()
         if current_path != None:
             fig.savefig(current_path)
+        plt.show()
+     
     #Second plot
     # Plot a snapshot of the order parameter in the middle of a phase slip
     t0 = 155
@@ -208,10 +211,10 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
         fig, axes = solution.plot_order_parameter(figsize=(10, 4))
     else:
         fig, axes = solution.plot_order_parameter(figsize=(10, 4),subtitle = order_title)
-    plt.show()
-    if order_path != None:
-            
+
+    if order_path != None:        
             fig.savefig(order_path)
+    plt.show()
 
 def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True,order_path= None,current_path= None):
     '''
@@ -297,7 +300,7 @@ def find_resistance(currents,voltages):
     dV_dI = np.gradient(voltages, currents)
     return dV_dI
     
-def current_application(device,currents,B_field = 0):
+def current_application(device,currents,file_path,B_field = 0):
     '''
     A function that applies a current sweep to a device and returns the corresponding voltages.
     
@@ -333,6 +336,8 @@ def current_application(device,currents,B_field = 0):
             print(f"I = {I:.1f} µA, <V> = {voltage:.4f} V₀,progress: {np.round(j/np.size(currents)*100,2)}%", end='\r')
         
     resistances = find_resistance(currents,voltages)
+    dd.save_data((currents,voltages),file_path,"currents(µA)  Voltages(V0)")
+    dd.save_data((currents,resistances),file_path ,"currents(µA)  resistances(R0)")
     clear_output(wait=True)
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -468,7 +473,7 @@ def critic_currents_augmentation(device, critic_regions, current_bounds, B=1.0, 
     return total_currents, total_voltages,total_resistance
 
 
-def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,deltay = 1,field = 1.0):
+def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,file_path,deltay = 1,field = 1.0):
 
     '''
     This function applies a current sweep to devices with varying heights and returns the corresponding voltages.
@@ -487,8 +492,7 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
         deltay = 5
     device_l  =create_device(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
     fig, ax = device_l.plot(mesh=True)
-    voltages =  current_application(device_l, currents,B_field = field)
-    resistance = find_resistance(currents,voltages)
+    voltages,resistance =  current_application(device_l, currents,file_path,B_field = field)
     return voltages,resistance
 
         

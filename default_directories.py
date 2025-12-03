@@ -7,10 +7,10 @@ def check_create_dir(directory):
 def create_default_directories():
     source = "./figures/"
     check_create_dir(source)
-    section1_dir = source + "df_fixed_current_plots"
-    section2_dir = source +"zero_currents_field_plots"
-    section3_dir = source +"magentization_plots"
-    section4_dir = source +"varying_currents_plots"
+    section1_dir = source + "1_df_fixed_current_plots"
+    section2_dir = source +"2_zero_currents_field_plots"
+    section3_dir = source +"3_magentization_plots"
+    section4_dir = source +"4_varying_currents_plots"
     check_create_dir(section1_dir)
     check_create_dir(section2_dir)
     check_create_dir(section3_dir)
@@ -18,12 +18,12 @@ def create_default_directories():
     ####################################################
     #Subdirectories created here                        #
     ####################################################
-    subsection21_dir = section2_dir + "/constant_field_fixed_current"
-    subsection22_dir = section2_dir + "/varying_field_zero_current"
-    subsection23_dir = section2_dir + "/fixed_field_zero_current_different_heights"
-    subsection41_dir = section4_dir + "/constant_field"
-    subsection42_dir = section4_dir + "/zero_field_different_heights"
-    subsection43_dir = section4_dir + "/different_fields"
+    subsection21_dir = section2_dir + "/_21_constant_field_fixed_current"
+    subsection22_dir = section2_dir + "/_22_varying_field_zero_current"
+    subsection23_dir = section2_dir + "/_23_fixed_field_zero_current_different_heights"
+    subsection41_dir = section4_dir + "/_41_constant_field"
+    subsection42_dir = section4_dir + "/_42_constant_field_different_heights"
+    subsection43_dir = section4_dir + "/_43_different_fields"
     check_create_dir(subsection21_dir)
     check_create_dir(subsection22_dir)
     check_create_dir(subsection23_dir)
