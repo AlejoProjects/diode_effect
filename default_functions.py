@@ -826,7 +826,7 @@ def critic_currents_augmentation(device, critic_regions, current_bounds, B=1.0, 
     return total_currents, total_voltages,total_resistance
 
 
-def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,file_path,deltay = 1,field = 1.0,terminals = [8,2]):
+def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,file_path,deltay = 1,field = 1.0,terminals = [8,2],length=0.3):
 
     '''
     This function applies a current sweep to devices with varying heights and returns the corresponding voltages.
@@ -862,7 +862,7 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
         my_terminals, 
         layer, 
         MAX_EDGE_LENGTH_IV,
-        stripe_length=STRIPE_LENGTH
+        stripe_length=length
     )
     voltages,resistance =  current_application(device_final, currents,file_path,B_field = field)
     return voltages,resistance
