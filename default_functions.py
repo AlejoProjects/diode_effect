@@ -116,9 +116,9 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_
     plt.ylabel(plot_labels["y"])
     plt.title(plot_labels["title"])
     plt.grid(True)
-    fig = plt.gcf()
+  
     if dir_path != None:
-        fig.savefig(dir_path,facecolor='white', bbox_inches='tight', pad_inches=0)
+        plt.savefig(dir_path,facecolor='white', bbox_inches='tight', pad_inches=0)
     plt.show()
 
 
@@ -689,8 +689,8 @@ def current_application(device,currents,file_path,B_field = 0):
             if os.path.exists(filename):
                      os.remove(filename)
     resistances = find_resistance(currents,voltages)
-    dd.save_data((currents,voltages),file_path+'/voltage_vs_current.txt',"currents(µA)  Voltages(V0)")
-    dd.save_data((currents,resistances),file_path +'/resistance_vs_current.txt',"currents(µA)  resistances(R0)")
+    dd.save_data((currents,voltages),file_path+'voltage_vs_current.txt',"currents(µA)  Voltages(V0)")
+    dd.save_data((currents,resistances),file_path +'resistance_vs_current.txt',"currents(µA)  resistances(R0)")
     clear_output(wait=True)
     end_time = time.time()
     elapsed_time = end_time - start_time
