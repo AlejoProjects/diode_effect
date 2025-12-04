@@ -116,8 +116,9 @@ def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_
     plt.ylabel(plot_labels["y"])
     plt.title(plot_labels["title"])
     plt.grid(True)
+    fig = plt.gcf()
     if dir_path != None:
-        plt.savefig(dir_path)
+        fig.savefig(dir_path,facecolor='white', bbox_inches='tight', pad_inches=0)
     plt.show()
 
 
@@ -446,15 +447,14 @@ def get_inward_probe_point(segment, depth=1.0):
         vec_unit = vec_to_arc / np.linalg.norm(vec_to_arc)
         # Move backwards (inward) from the arc
         return segment_mid - (vec_unit * depth)
-def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_length, width_pct=100, stripe_length=0.01, central_probe_separation=3.0):
+def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_length, width_pct=100, stripe_length=0.01, central_probe_separation=3.0, orientation="horizontal",sep_constant=0.7):
     """
     Adds multiple terminals and REPLACES existing probes with exactly 2 central probes.
+    
+    :param orientation: "horizontal" (default) aligns probes along X-axis. 
+                        "vertical" aligns probes along Y-axis.
     """
     new_terminals = list(device.terminals)
-    
-    # Store centroids for flow calculation
-    source_centers = []
-    drain_centers = []
     
     # 1. Add All Requested Terminals
     for config in terminal_configs:
@@ -475,33 +475,23 @@ def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_l
             stripe_length=stripe_length
         )
         new_terminals.append(term_poly)
-        
-        # Collect positions
-        pts = seg['points']
-        seg_center = (pts[0] + pts[-1]) / 2
-        
-        if 'source' in config['name'].lower():
-            source_centers.append(seg_center)
-        elif 'drain' in config['name'].lower():
-            drain_centers.append(seg_center)
 
-    # 2. Smart Probe Placement (Central Intersection)
+    # 2. Probe Placement (Central Intersection)
     all_points = np.vstack([s['points'] for s in segments])
     device_center = np.mean(all_points, axis=0)
     
-    # Calculate Flow Direction
-    if source_centers and drain_centers:
-        avg_source = np.mean(source_centers, axis=0)
-        avg_drain = np.mean(drain_centers, axis=0)
-        flow_vec = avg_drain - avg_source
-        flow_dist = np.linalg.norm(flow_vec)
-        flow_dir = flow_vec / flow_dist if flow_dist > 0 else np.array([1, 0])
+    # Determine direction based on orientation parameter
+    if orientation.lower() == "vertical":
+        # Align along Y-axis
+        flow_dir = np.array([0.0, 1.0])
     else:
-        flow_dir = np.array([1, 0]) 
+        # Default: Align along X-axis (Horizontal)
+        flow_dir = np.array([1.0, 0.0])
 
     # Place probes
-    p1 = device_center - (flow_dir * (central_probe_separation*0.7))
-    p2 = device_center + (flow_dir * (central_probe_separation*0.7))
+    # Using the 0.7 multiplier from your snippet
+    p1 = device_center - (flow_dir * (central_probe_separation * sep_constant))
+    p2 = device_center + (flow_dir * (central_probe_separation * sep_constant))
     
     # THIS is the key: we only put these 2 into the array
     final_probes = np.array([p1, p2])
@@ -521,14 +511,15 @@ def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_l
     )
     
     # 4. Remesh & Plot
-    print(f"Remeshing... Probes placed {central_probe_separation}um apart at center.")
+    print(f"Remeshing... Probes placed {central_probe_separation}um apart at center ({orientation}).")
     new_device.make_mesh(max_edge_length=max_edge_length, smooth=100)
     
     fig, ax = new_device.plot(mesh=True)
-  
+    
+    # Visual confirmation of probes
+    ax.scatter(final_probes[:,0], final_probes[:,1], c='red', marker='x', s=100, label='Probes', zorder=10)
+    
     return new_device
-
-
 # =================================================================================
 ## Simulation functions 
 # ================================================================================
@@ -557,8 +548,10 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
             _ = solution.plot_currents(ax=axes[1],title = current_title)  
         plt.subplots_adjust(wspace=0.4)  # Increase horizontal space between subplots
         plt.tight_layout()  # Automatically adjusts subplots to fit in figure
+        fig = plt.gcf()
         if current_path != None:
-            fig.savefig(current_path)
+            
+            fig.savefig(current_path,facecolor='white', bbox_inches='tight', pad_inches=0)
         plt.show()
      
     #Second plot
@@ -569,9 +562,9 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
         fig, axes = solution.plot_order_parameter(figsize=(10, 4))
     else:
         fig, axes = solution.plot_order_parameter(figsize=(10, 4),subtitle = order_title)
-
+    fig = plt.gcf()
     if order_path != None:        
-            fig.savefig(order_path)
+            fig.savefig(order_path,facecolor='white', bbox_inches='tight', pad_inches=0)
     plt.show()
 
 def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True,order_path= None,current_path= None):
@@ -696,8 +689,8 @@ def current_application(device,currents,file_path,B_field = 0):
             if os.path.exists(filename):
                      os.remove(filename)
     resistances = find_resistance(currents,voltages)
-    dd.save_data((currents,voltages),file_path,"currents(µA)  Voltages(V0)")
-    dd.save_data((currents,resistances),file_path ,"currents(µA)  resistances(R0)")
+    dd.save_data((currents,voltages),file_path+'/voltage_vs_current.txt',"currents(µA)  Voltages(V0)")
+    dd.save_data((currents,resistances),file_path +'/resistance_vs_current.txt',"currents(µA)  resistances(R0)")
     clear_output(wait=True)
     end_time = time.time()
     elapsed_time = end_time - start_time
@@ -833,7 +826,7 @@ def critic_currents_augmentation(device, critic_regions, current_bounds, B=1.0, 
     return total_currents, total_voltages,total_resistance
 
 
-def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,file_path,deltay = 1,field = 1.0):
+def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,file_path,deltay = 1,field = 1.0,terminals = [8,2]):
 
     '''
     This function applies a current sweep to devices with varying heights and returns the corresponding voltages.
@@ -856,8 +849,8 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
 # Example: A 4-terminal measurement setup
 
     my_terminals = [
-        {"id": 8,  "name": "s"},
-        {"id": 2, "name": "d"}
+        {"id": terminals[0],  "name": "s"},
+        {"id": terminals[1], "name": "d"}
     ]
     segments_found = visualize_segments(device_l,view = False)
 
