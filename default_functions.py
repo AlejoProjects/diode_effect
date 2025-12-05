@@ -867,5 +867,125 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
     voltages,resistance =  current_application(device_final, currents,file_path,B_field = field)
     return voltages,resistance
 
-        
+#################################################################################################
+# Custom Plots 
+# #################################################################################################
+def plot_order_parameter(
+    solution: tdgl.Solution,
+    squared: bool = False,
+    subtitle: str = "Order Parameter",
+    mag_cmap: str = "viridis",
+    phase_cmap: str = "twilight_shifted",
+    shading: str = "gouraud",
+    **kwargs,
+) :
+    """Plots the magnitude (or the magnitude squared) and
+    phase of the complex order parameter, :math:`\\psi=|\\psi|e^{i\\theta}`.
 
+    .. seealso:
+
+        :meth:`tdgl.Solution.plot_order_parameter`
+
+    Args:
+        solution: The solution for which to plot the order parameter.
+        squared: Whether to plot the magnitude squared, :math:`|\\psi|^2`.
+        mag_cmap: Name of the colormap to use for the magnitude.
+        phase_cmap: Name of the colormap to use for the phase.
+        shading: May be ``"flat"`` or ``"gouraud"``. The latter does some interpolation.
+
+    Returns:
+        matplotlib Figure and an array of two Axes objects.
+    """
+    kwargs.setdefault("figsize", (8, 3))
+    kwargs.setdefault("constrained_layout", True)
+    device = solution.device
+    psi = solution.tdgl_data.psi
+    mag = np.abs(psi)
+    if squared:
+        mag = mag**2
+    phase = np.angle(psi) / np.pi
+    points = device.points
+    triangles = device.triangles
+    fig, axes = plt.subplots(1, 2, **kwargs)
+
+    im = axes[0].tripcolor(
+        points[:, 0],
+        points[:, 1],
+        mag,
+        triangles=triangles,
+        vmin=0,
+        vmax=1,
+        cmap=mag_cmap,
+        shading=shading,
+    )
+    cbar = fig.colorbar(im, ax=axes[0])
+    im = axes[1].tripcolor(
+        points[:, 0],
+        points[:, 1],
+        phase,
+        triangles=triangles,
+        vmin=-1,
+        vmax=1,
+        cmap=phase_cmap,
+        shading=shading,
+    )
+    cbar = fig.colorbar(im, ax=axes[1])
+    length_units = device.ureg(device.length_units).units
+    for ax in axes:
+        ax.set_aspect("equal")
+    return fig, axes
+           
+
+def plot_phase_gradient(solution, ax=None):
+    """
+    Calculates and plots the magnitude of the Phase Gradient.
+    Physically, this represents the superfluid velocity.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 5))
+    else:
+        fig = ax.get_figure()
+
+    # 1. Get Data
+    # J_s is the supercurrent density
+    J_s = solution.supercurrent_density 
+    # psi is the order parameter
+    psi = solution.tdgl_data.psi
+    
+    # 2. Calculate Density |psi|^2
+    rho = np.abs(psi)**2
+    
+    # 3. Calculate Phase Gradient Magnitude
+    # From GL Theory: J_s ~ rho * grad(phi)  ->  grad(phi) ~ J_s / rho
+    # We calculate the magnitude of the current vector
+    J_mag = np.linalg.norm(J_s, axis=1)
+    
+    # We divide J by rho to get the velocity (phase gradient)
+    # We add a tiny epsilon (1e-6) to rho to avoid dividing by zero in vortex cores
+    phase_grad_mag = J_mag / (rho + 1e-6)
+    
+    # 4. Mask Vortex Cores
+    # Inside a vortex, density is 0, so the gradient is mathematically infinite/undefined.
+    # We mask these out for a cleaner plot.
+    phase_grad_mag[rho < 0.05] = np.nan
+
+    # 5. Plot
+    device = solution.device
+    x, y = device.points[:, 0], device.points[:, 1]
+    triangles = device.triangles
+
+    im = ax.tripcolor(
+        x, y, triangles, 
+        phase_grad_mag, 
+        shading="gouraud", 
+        cmap="plasma",
+        vmax=np.nanpercentile(phase_grad_mag, 95) # Auto-scale to ignore spikes
+    )
+    
+    # Add Colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    #cbar.set_label(r"$|\nabla \phi|$ (Superfluid Velocity)")
+    
+
+    ax.set_aspect("equal")   
+    return fig, ax

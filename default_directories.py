@@ -109,3 +109,24 @@ def clean_temp_files():
         print(f"Deleted: {deleted_count}")
         print(f"Skipped: {errors}")
 
+def load_two_columns(filepath, col1_name=None, col2_name=None,both=False):
+    """
+    Load two columns from a txt file.
+    
+    Args:
+        filepath: Path to the txt file
+        col1_name: Name of first column (optional)
+        col2_name: Name of second column (optional)
+    
+    Returns:
+        tuple: (array1, array2) containing data from each column
+    """
+    # Read the file
+    data = np.loadtxt(filepath, skiprows=1)
+    array2 = data[:, 1]
+    # Extract columns
+    if both == True:
+        array1 = data[:, 0]
+        return array1, array2
+ 
+    return array2
