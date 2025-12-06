@@ -6,6 +6,8 @@ from tdgl.sources import ConstantField
 from tdgl.geometry import box, circle
 import default_directories as dd
 import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
+import matplotlib.tri as mtri
 import numpy as np
 import tempfile
 import h5py
@@ -520,11 +522,11 @@ def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_l
     ax.scatter(final_probes[:,0], final_probes[:,1], c='red', marker='x', s=100, label='Probes', zorder=10)
     
     return new_device
-# =================================================================================
+##################################################################################
 ## Simulation functions 
-# ================================================================================
+##################################################################################
 
-def plot_solution(solution,order_title = None,current_title = None,currentBool = True,order_path= None,current_path= None):
+def plot_solution(solution,order_title = None,current_title = None,currentBool = True,order_path= None,current_path= None,view = True):
     '''
     Graphs the applied current on the device and the pahse for a fixed current/constant field 
     :param solution: tdgl.solution object
@@ -552,8 +554,11 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
         if current_path != None:
             
             fig.savefig(current_path,facecolor='white', bbox_inches='tight', pad_inches=0)
-        plt.show()
-     
+        if view == True:
+          plt.show()
+        else:
+          plt.close()
+
     #Second plot
     # Plot a snapshot of the order parameter in the middle of a phase slip
     t0 = 155
@@ -565,9 +570,12 @@ def plot_solution(solution,order_title = None,current_title = None,currentBool =
     fig = plt.gcf()
     if order_path != None:        
             fig.savefig(order_path,facecolor='white', bbox_inches='tight', pad_inches=0)
-    plt.show()
+    if view == True:
+        plt.show()
+    else:
+        plt.close()
 
-def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True,order_path= None,current_path= None):
+def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=False,order_path= None,current_path= None,view = False):
     '''
     Graphs a group of plots including the current, order parameter, vorticity and scalar potential
     :param solution: tdgl.solution object   
@@ -580,14 +588,40 @@ def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=True
     returns: None
     '''
     if titleBool == True:
-        plot_solution(solution,currentBool=currentBool,order_title=used_titles["order_parameter"],current_title=used_titles["sheet_current"],order_path=order_path,current_path=current_path)
-        solution.plot_vorticity(figsize=figure_size,title=used_titles["vorticity"])
-        solution.plot_scalar_potential(figsize=figure_size,title=used_titles["scalar_potential"])
+        plot_solution(solution,currentBool=currentBool,order_title=used_titles["order_parameter"],current_title=used_titles["sheet_current"],order_path=order_path,current_path=current_path,view=view)
+        if view == True:
+          solution.plot_vorticity(figsize=figure_size,title=used_titles["vorticity"])
+          solution.plot_scalar_potential(figsize=figure_size,title=used_titles["scalar_potential"])
     else:
-        plot_solution(solution,currentBool=currentBool,order_path=order_path,current_path=current_path)
-        solution.plot_vorticity(figsize=figure_size)
-        solution.plot_scalar_potential(figsize=figure_size)
+        plot_solution(solution,currentBool=currentBool,order_path=order_path,current_path=current_path,view=view)
+        if view == True:
+          solution.plot_vorticity(figsize=figure_size)
+          solution.plot_scalar_potential(figsize=figure_size)
 
+
+
+def create_varying_device(device,layer):
+    segments_found = visualize_segments(device,view=False)
+    my_terminals = [
+        {"id": 8,  "name": "s"},
+        {"id": 2, "name": "d"}
+    ]
+
+    # 3. Create the device
+    # This will now work and place probes at the first 2 terminals automatically
+    device_final = add_multiple_terminals(
+        device, 
+        segments_found, 
+        my_terminals, 
+        layer, 
+        MAX_EDGE_LENGTH_IV,
+        stripe_length=STRIPE_LENGTH
+    )
+    return device_final
+
+######################################################################################
+#Varying Functions
+######################################################################################
 # =========================
 # 5) Magnetization function
 # =========================
@@ -989,3 +1023,284 @@ def plot_phase_gradient(solution, ax=None):
 
     ax.set_aspect("equal")   
     return fig, ax
+
+def plot_parameter_sweep(solutions, labels, title="", order_path=None):
+    """
+    Creates a multi-row figure comparing multiple TDGL solutions.
+    
+    Features:
+    - Rows: Different simulation runs.
+    - Col 1: Cooper Pair Density |psi|^2
+    - Col 2: Phase Gradient Magnitude |grad phi| (Superfluid Velocity)
+    - Automatic Current Direction: Draws arrows 'I' entering Source and leaving Drain.
+    - Shared Color Scales: Ensures colors mean the same thing across all rows.
+    
+    Args:
+        solutions: List of tdgl.Solution objects.
+        labels: List of strings corresponding to each solution.
+        title: Global title for the figure.
+        order_path: Optional file path to save the resulting image.
+    """
+    n_rows = len(solutions)
+    n_cols = 2
+    
+    if len(labels) != n_rows:
+        raise ValueError(f"Number of labels ({len(labels)}) must match number of solutions ({n_rows}).")
+
+    # --- 1. PRE-CALCULATION FOR SHARED SCALES ---
+    # We need a global max for the gradient plot to ensure the single colorbar 
+    # applies correctly to all rows.
+    all_grads_samples = []
+    
+    for sol in solutions:
+        psi = sol.tdgl_data.psi
+        if hasattr(psi, "magnitude"): psi = psi.magnitude
+        rho = np.abs(psi)**2
+        
+        J_s = sol.supercurrent_density
+        if hasattr(J_s, "magnitude"): J_s = J_s.magnitude
+        
+        # Calculate Phase Gradient |grad phi| ~ |Js| / rho
+        J_mag = np.linalg.norm(J_s, axis=1)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            grad = J_mag / (rho + 1e-6)
+            # Filter out the singularity spikes (vortex cores) for percentile calc
+            # We only look at valid superconducting regions to set the color scale
+            valid_grad = grad[rho > 0.05]
+            if len(valid_grad) > 0:
+                all_grads_samples.append(valid_grad)
+    
+    # Calculate global vmax (98th percentile to ignore extreme outliers in vortex cores)
+    if all_grads_samples:
+        global_grad_vmax = np.percentile(np.concatenate(all_grads_samples), 98)
+    else:
+        global_grad_vmax = 1.0
+
+    # --- 2. PLOTTING SETUP ---
+    # constrained_layout=True helps fit the colorbars automatically
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(7.5, 3.5 * n_rows), constrained_layout=True)
+    
+    # Ensure axes is always a 2D array even if n_rows=1
+    if n_rows == 1:
+        axes = np.array([axes])
+
+    im_psi_last = None
+    im_grad_last = None
+
+    for i, (sol, label_text) in enumerate(zip(solutions, labels)):
+        device = sol.device
+        x, y = device.points[:, 0], device.points[:, 1]
+        triangles = device.triangles
+        
+        # --- ARROW DIRECTION LOGIC ---
+        # Find centroids of 'source' and 'drain' terminals to determine direction
+        source_centers = []
+        drain_centers = []
+        
+        if hasattr(device, 'terminals'):
+            for term in device.terminals:
+                # Calculate centroid of the terminal polygon
+                pts = term.points
+                center = np.mean(pts, axis=0)
+                name = term.name.lower() if term.name else ""
+                
+                if 'source' in name:
+                    source_centers.append(center)
+                elif 'drain' in name:
+                    drain_centers.append(center)
+        
+        # Default to Left -> Right if no named terminals found
+        direction = np.array([1.0, 0.0])
+        
+        if source_centers and drain_centers:
+            avg_source = np.mean(source_centers, axis=0)
+            avg_drain = np.mean(drain_centers, axis=0)
+            vec = avg_drain - avg_source
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                direction = vec / norm
+
+        # --- DATA EXTRACTION ---
+        psi = sol.tdgl_data.psi
+        if hasattr(psi, "magnitude"): psi = psi.magnitude
+        rho = np.abs(psi)**2
+        
+        J_s = sol.supercurrent_density
+        if hasattr(J_s, "magnitude"): J_s = J_s.magnitude
+        J_mag = np.linalg.norm(J_s, axis=1)
+        
+        phase_grad = J_mag / (rho + 1e-6)
+        # Mask vortex cores for the main plot data (makes them transparent)
+        phase_grad[rho < 0.05] = np.nan
+        
+        # --- COL 1: |psi|^2 ---
+        ax_psi = axes[i, 0]
+        
+        # BACKGROUND LAYER (Color of 0):
+        # We plot the full mesh with value 0. This makes the device look like 
+        # the bottom of the colorbar (Dark Purple) wherever data might be missing/masked.
+        ax_psi.tripcolor(
+            x, y, triangles, 
+            np.zeros_like(x), 
+            shading="gouraud", 
+            cmap="viridis", 
+            vmin=0, vmax=1
+        )
+        
+        # DATA LAYER:
+        im_psi = ax_psi.tripcolor(
+            x, y, triangles,
+            rho,
+            shading="gouraud",
+            cmap="viridis",
+            vmin=0, vmax=1
+        )
+        im_psi_last = im_psi # Save for colorbar
+        
+        ax_psi.set_aspect("equal")
+        ax_psi.set_xticks([])
+        ax_psi.set_yticks([])
+        # Row Label on the LEFT of the first plot
+        # Increased labelpad from 40 to 60 to add more distance
+        ax_psi.set_ylabel(label_text, fontsize=14, fontweight='normal', rotation=0, labelpad=60)
+        ax_psi.yaxis.set_label_position("left")
+        
+        # --- COL 2: |grad phi| ---
+        ax_grad = axes[i, 1]
+        
+        # BACKGROUND LAYER (Color of 0):
+        ax_grad.tripcolor(
+            x, y, triangles, 
+            np.zeros_like(x), 
+            shading="gouraud", 
+            cmap="viridis", 
+            vmin=0, vmax=global_grad_vmax
+        )
+        
+        # DATA LAYER:
+        im_grad = ax_grad.tripcolor(
+            x, y, triangles,
+            phase_grad,
+            shading="gouraud",
+            cmap="viridis",
+            vmin=0, vmax=global_grad_vmax
+        )
+        im_grad_last = im_grad # Save for colorbar
+        
+        ax_grad.set_aspect("equal")
+        ax_grad.set_xticks([])
+        ax_grad.set_yticks([])
+        
+        # --- DRAW CURRENT ARROWS (Input/Output) ---
+        x_min, x_max = x.min(), x.max()
+        width = x_max - x_min
+        arrow_len = width * 0.15 # Arrow length is 15% of device width
+        gap = width * 0.05 # Gap between terminal and arrow
+
+        if source_centers and drain_centers:
+            avg_source = np.mean(source_centers, axis=0)
+            avg_drain = np.mean(drain_centers, axis=0)
+            
+            # 1. Source Arrow (Incoming)
+            # Ends near Source centroid, pointing IN direction of flow
+            s_tip = avg_source - direction * gap
+            s_tail = s_tip - direction * arrow_len
+            
+            # Draw on Gradient Plot
+            ax_grad.annotate(
+                "", 
+                xy=(s_tip[0], s_tip[1]), 
+                xytext=(s_tail[0], s_tail[1]),
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5),
+                annotation_clip=False
+            )
+            # Draw on Psi Plot
+            ax_psi.annotate(
+                "", 
+                xy=(s_tip[0], s_tip[1]), 
+                xytext=(s_tail[0], s_tail[1]),
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5),
+                annotation_clip=False
+            )
+            
+            # 2. Drain Arrow (Outgoing)
+            # Starts near Drain centroid, pointing AWAY
+            d_tail = avg_drain + direction * gap
+            d_tip = d_tail + direction * arrow_len
+            
+            # Draw on Gradient Plot
+            ax_grad.annotate(
+                "", 
+                xy=(d_tip[0], d_tip[1]), 
+                xytext=(d_tail[0], d_tail[1]),
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5),
+                annotation_clip=False
+            )
+            # Draw on Psi Plot
+            ax_psi.annotate(
+                "", 
+                xy=(d_tip[0], d_tip[1]), 
+                xytext=(d_tail[0], d_tail[1]),
+                arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5),
+                annotation_clip=False
+            )
+            
+            # Label "I" near the Source arrow
+            ax_grad.text(
+                s_tail[0], s_tail[1], 
+                r"$I$", 
+                ha='right', va='center', color='black', fontsize=12, fontweight='bold'
+            )
+            ax_psi.text(
+                s_tail[0], s_tail[1], 
+                r"$I$", 
+                ha='right', va='center', color='black', fontsize=12, fontweight='bold'
+            )
+            
+        else:
+            # Fallback: Arrows at left and right bounding box edges
+            center_y = (y.min() + y.max()) / 2
+            
+            # Left In
+            s_tip = np.array([x_min, center_y])
+            s_tail = s_tip - np.array([arrow_len, 0])
+            ax_grad.annotate("", xy=s_tip, xytext=s_tail, arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5), annotation_clip=False)
+            ax_psi.annotate("", xy=s_tip, xytext=s_tail, arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5), annotation_clip=False)
+            
+            # Right Out
+            d_tail = np.array([x_max, center_y])
+            d_tip = d_tail + np.array([arrow_len, 0])
+            ax_grad.annotate("", xy=d_tip, xytext=d_tail, arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5), annotation_clip=False)
+            ax_psi.annotate("", xy=d_tip, xytext=d_tail, arrowprops=dict(arrowstyle="-|>", color="black", lw=1.5), annotation_clip=False)
+            
+            ax_grad.text(
+                s_tail[0] - width*0.02, s_tail[1], 
+                r"$I$", 
+                ha='right', va='center', color='black', fontsize=12, fontweight='bold'
+            )
+            ax_psi.text(
+                s_tail[0] - width*0.02, s_tail[1], 
+                r"$I$", 
+                ha='right', va='center', color='black', fontsize=12, fontweight='bold'
+            )
+
+        # Titles (Top only)
+        if i == 0:
+            ax_psi.set_title(r"Cooper Pair Density $|\psi|^2$")
+            ax_grad.set_title(r"Superfluid Velocity $|\nabla \phi|$")
+
+    # --- 3. GLOBAL COLORBARS ---
+    # We place one colorbar for the Grad column on the right
+    cbar_grad = fig.colorbar(im_grad_last, ax=axes[:, 1], location='right', fraction=0.5, pad=0.02)
+    # Optional: Label the colorbar if desired
+    # cbar_grad.set_label(r"$|\nabla \phi|$")
+    
+    # We place one colorbar for the Psi column (optional, but good for completeness)
+    # cbar_psi = fig.colorbar(im_psi_last, ax=axes[:, 0], location='right', fraction=0.5, pad=0.02)
+
+    fig.suptitle(title)
+    
+    if order_path is not None:        
+        fig.savefig(order_path, facecolor='white', bbox_inches='tight', pad_inches=0)
+
+    return fig, axes
