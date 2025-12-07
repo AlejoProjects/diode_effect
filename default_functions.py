@@ -601,11 +601,11 @@ def plot_group(solution,figure_size,used_titles,currentBool= True,titleBool=Fals
 
 
 
-def create_varying_device(device,layer):
+def create_varying_device(device,layer,terminals=[8,2]):
     segments_found = visualize_segments(device,view=False)
     my_terminals = [
-        {"id": 8,  "name": "s"},
-        {"id": 2, "name": "d"}
+        {"id": terminals[0],  "name": "s"},
+        {"id": terminals[1], "name": "d"}
     ]
 
     # 3. Create the device
