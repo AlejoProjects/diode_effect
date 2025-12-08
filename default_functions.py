@@ -879,18 +879,13 @@ def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displac
     if deltay == 4:
         deltay = 5
     device_l  =create_device(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,translationx=displacement,incrementy=deltay)#
-    
-# 2. Define your list of terminals
-# Example: A 4-terminal measurement setup
-
     my_terminals = [
         {"id": terminals[0],  "name": "s"},
         {"id": terminals[1], "name": "d"}
     ]
     segments_found = visualize_segments(device_l,view = False)
 
-# 3. Create the device
-# This will now work and place probes at the first 2 terminals automatically
+
     device_final = add_multiple_terminals(
         device_l, 
         segments_found, 
@@ -1028,21 +1023,15 @@ def plot_phase_gradient(solution, ax=None):
 
 def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientation="vertical",cbar_y_offset=0.0,cbar_x_offset=0.0,c_value="J=0.0mA , y = 3.0$\mu m$"):
     """
-    Crea una figura comparativa de múltiples soluciones TDGL con alineación perfecta.
-    
-    Características:
-    - Orientation="vertical": Filas=Simulaciones, Cols=Psi/Fase.
-    - Orientation="horizontal": Filas=Psi/Fase, Cols=Simulaciones.
-    - Etiquetas: Texto negro, alineado a la izquierda.
-    - Espaciado: wspace=0 para unir gráficos horizontalmente.
-    - Marcos: Eliminados completamente (axis off).
-    
-    Args:
-        solutions: Lista de objetos tdgl.Solution.
-        labels: Lista de textos (str).
-        title: Título global.
-        order_path: Ruta opcional para guardar la imagen.
-        orientation: "vertical" o "horizontal".
+   Creates a grid of plots showing the order parameter (magnitude and phase)
+    parameters:
+    params:solutions: Object list of tdgl.Solution
+    params:labels: List of strings with labels for each solution
+    params:title: String, title for the entire figure   
+    params:order_path: String, path to save the figure
+    params:orientation: String, "vertical" or "horizontal" layout
+    Returns:
+    None  
     """
     n_sols = len(solutions)
     
@@ -1057,7 +1046,7 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
     if len(labels) != n_sols:
         raise ValueError(f"El número de etiquetas ({len(labels)}) debe coincidir con las soluciones ({n_sols}).")
 
-    # --- CONFIGURACIÓN DEL PLOT Y DIMENSIONES ---
+    # --- Plot dimensions  ---
     if orientation == "vertical":
         n_rows = n_sols
         n_cols = 2
@@ -1065,7 +1054,7 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
     else: # horizontal
         n_rows = 2
         n_cols = n_sols
-        # Ajustamos el ancho según columnas, alto fijo para 2 filas
+        #Amount of columns
         figsize = (1 * n_cols, 4.0)
     
     # --- CREACIÓN DE LA FIGURA ---
@@ -1077,10 +1066,10 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
         gridspec_kw={'wspace': 0.0, 'hspace': 0.05}
     )
     
-    # Eliminar márgenes externos
+    # Remove external margins
     fig.subplots_adjust(left=0, right=1, bottom=0, top=1, wspace=0, hspace=0.05)
     
-    # Asegurar que axes sea indexable como matriz 2D
+    # Indexable axes on all cases
     if n_rows == 1 and n_cols > 1:
         axes = axes.reshape(1, -1)
     elif n_cols == 1 and n_rows > 1:
@@ -1090,26 +1079,26 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
     
     alphabet = string.ascii_lowercase
     
-    # Referencias para colorbar
+    #Colorbar references
     im_psi_ref = None
     im_phase_ref = None
 
     # Índice para saber dónde dibujar la colorbar (última simulación en horizontal, fila específica en vertical)
     cbar_idx_vert = 1 if n_sols > 1 else 0
 
-    # --- BUCLE PRINCIPAL ---
+    # --- Principal loop ---
     for i, (sol, label_text) in enumerate(zip(solutions, labels)):
         device = sol.device
         x, y = device.points[:, 0], device.points[:, 1]
         triangles = device.triangles
         
-        # Datos
+        # Data
         psi = sol.tdgl_data.psi
         if hasattr(psi, "magnitude"): psi = psi.magnitude
         rho = np.abs(psi)**2
         phase = np.angle(psi) / np.pi
         
-        # --- SELECCIÓN DE EJES ---
+        # ---Axes selection ---
         # Vertical: axes[i, 0]=Psi, axes[i, 1]=Fase
         # Horizontal: axes[0, i]=Psi, axes[1, i]=Fase
         if orientation == "vertical":
@@ -1119,13 +1108,13 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
             ax_psi = axes[0, i]
             ax_phase = axes[1, i]
         
-        # --- GRAFICAR PSI ---
+        # --- GRAPH PSI ---
         im_psi = ax_psi.tripcolor(x, y, triangles, rho, shading="gouraud", cmap="viridis", vmin=0, vmax=1)
         if i == 0: im_psi_ref = im_psi 
         ax_psi.set_aspect("equal")
         ax_psi.axis('off')
         
-        # --- ETIQUETAS A) B) C) ---
+        # --- A) B) C) ---
         # En horizontal, 'i' avanza por columnas, así que la etiqueta va arriba de cada columna
         seq_char = alphabet[i]
         combined_label = f"{seq_char}) {label_text}"
@@ -1138,38 +1127,37 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
             va='bottom', ha='left'
         )
        
-        # --- GRAFICAR FASE ---
+        # --- Graph phase ---
         im_phase = ax_phase.tripcolor(x, y, triangles, phase, shading="gouraud", cmap="twilight", vmin=-1, vmax=1)
         if i == 0: im_phase_ref = im_phase 
         ax_phase.set_aspect("equal")
         ax_phase.axis('off')
         
-        # --- TÍTULOS DE EJES (Psi^2, Phi) ---
+        # --- Axes Titles (Psi^2, Phi) ---
         if orientation == "vertical":
-            # Títulos arriba de la primera fila
+            # Títulos above the first row
             if i == 0:
                 ax_psi.set_title(r"$|\psi|^2$", fontsize=13, pad=17)
                 ax_phase.set_title(r"$\Delta \phi $", fontsize=11, pad=17)
         else:
-            # Títulos a la izquierda de la primera columna (columna de títulos)
+            #Titles left of the first column
             if i == 0:
                 ax_psi.text(-0.1, 0.5, r"$|\psi|^2$", transform=ax_psi.transAxes, 
                             fontsize=13, va='center', ha='right', rotation=90)
                 ax_phase.text(-0.1, 0.5, r"$\Delta \phi $", transform=ax_phase.transAxes, 
                               fontsize=11, va='center', ha='right', rotation=90)
 
-        # --- ANCLAJES (Espaciado Cero) ---
+        # --- ANCHORS(spacing 0) ---
         if orientation == "vertical":
-            # Pegar Psi (Izq) con Fase (Der)
+
             ax_psi.set_anchor('E')
             ax_phase.set_anchor('W')
         else:
-            # Pegar Psi (Arriba) con Fase (Abajo) verticalmente
-            # La distancia horizontal entre columnas ya es 0 por wspace=0
+
             ax_psi.set_anchor('S')
             ax_phase.set_anchor('N')
 
-     # --- BARRAS DE COLOR (Restaurada Psi) ---
+     # --- Color Bars---
         draw_cbar = False
         if orientation == "vertical" and i == cbar_idx_vert:
             draw_cbar = True
@@ -1191,7 +1179,7 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
             cbar_psi.ax.tick_params(labelsize=8, length=2, pad=1)
             cbar_psi.set_ticks([0, 0.5, 1])
             cbar_psi.outline.set_visible(False)
-    # --- FINALIZACIÓN ---
+
 
 
     ax_top_left = axes.flat[0]
