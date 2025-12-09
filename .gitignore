@@ -5,4 +5,5 @@ magnetizacion_vs_B.txt
 .ipynb_checkpoints/
 project_field_h5_files/
 figures/
+figures_vertical/
 __pycache__/
