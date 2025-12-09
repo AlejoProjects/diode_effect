@@ -7,13 +7,13 @@ import os
 def check_create_dir(directory):
     if not os.path.exists(directory):
         os.makedirs(directory)
-def create_default_directories(source):
-
+def create_default_directories(source,suffix = ""):
+    
     check_create_dir(source)
-    section1_dir = source + "1_df_fixed_current_plots"
-    section2_dir = source +"2_zero_currents_field_plots"
-    section3_dir = source +"3_magentization_plots"
-    section4_dir = source +"4_varying_currents_plots"
+    section1_dir = source + suffix + "1_df_fixed_current_plots"
+    section2_dir = source + suffix + "2_zero_currents_field_plots"
+    section3_dir = source + suffix +"3_magentization_plots"
+    section4_dir = source + suffix + "4_varying_currents_plots"
     check_create_dir(section1_dir)
     check_create_dir(section2_dir)
     check_create_dir(section3_dir)

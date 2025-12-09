@@ -1,4 +1,5 @@
 from tdgl.visualization.animate import create_animation
+from scipy.signal import find_peaks, savgol_filter
 from shapely.geometry import LineString, Point
 from IPython.display import HTML, display
 from IPython.display import clear_output
@@ -101,9 +102,6 @@ def default_solution(device,file_name,terminal_currents_applied,vector_potential
          applied_vector_potential=external_field
         )
     return solution
-# ====================================================
-# 3.)Default configuration
-# ====================================================
 
 
 def plot_parameters(p1,p2,plot_labels,plot_type="plot",color_applied="teal",dir_path = None):
@@ -739,126 +737,97 @@ def current_application(device,currents,file_path,B_field = 0):
     print("-" * 50)
     return voltages,resistances
 #Possible critic currents step optimizer function
+########################################################
+#Crtic currents functions
+########################################################
 
-def critic_guess(currents,voltages,delta):
-    '''
-    This function estimates the critical regions in the IV curve where the voltage changes rapidly with respect to the current.
-    It uses the gradient of the voltage with respect to the current to identify these regions based on a threshold defined by the delta parameter.
-    Parameters:
-    :param currents (np.array): Array of current values.
-    :param voltages (np.array): Array of voltage values corresponding to the currents.
-    :param delta (float): A scaling factor to determine the threshold for identifying critical regions.
+def find_critical_currents(currents, voltages, quantity=5, smooth_window=11, poly_order=3, prominence=0.1):
+    """
+    Finds critical currents (Ic) by analyzing peaks in the differential resistance (dV/dI).
+    It is more robust to noise than the simple threshold method.
+
+   parameters:
+   param: currents: np.array
+   param: voltages: np.array
+   param: quantity: int
+   param: smooth_window: int
+   param: poly_order: int
+   param: prominence: float Minimum prominence of peaks as a fraction of the maximum peak height.
     Returns:
-    np.array: Array of critical current values where significant voltage changes occur.
-    '''
-    dV_dI = find_resistance(currents,voltages)
-    threshold = delta * np.max(dV_dI)
-    critic_regions = currents[dV_dI > threshold]
-    #print(f'for {delta} the size is {np.size(critic_regions)}')
-    return critic_regions
+  
+    np.array
+        Array with current values where critical transitions occur.
+    """
+    # 1. Calculate Differential Resistance (dV/dI)
+    # Use np.gradient which handles edges better than np.diff
+    dV_dI = np.gradient(voltages, currents)
+    
+    # 2. Smooth the signal to remove numerical noise
+    # This is crucial for discrete simulations
+    if len(dV_dI) > smooth_window:
+        dV_dI_smooth = savgol_filter(dV_dI, window_length=smooth_window, polyorder=poly_order)
+    else:
+        dV_dI_smooth = dV_dI
 
-def find_critic_regions(currents,voltages,quantity=4,jo=0.5):
-    '''
-    This function finds critical regions in the IV curve by iteratively adjusting a delta parameter until the desired number of critical regions is found.
-    It calls the critic_guess function to identify critical regions based on the gradient of voltage with respect to current.
-    Parameters:
-    :param currents (np.array): Array of current values.
-    :param voltages (np.array): Array of voltage values corresponding to the currents.
-    :param quantity (int): Desired number of critical regions to find (default is 4).
-    :param jo (float): Initial delta value to start the search (default is 0.5).
+    # 3. Find peaks
+    # 'prominence' ensures it is a real peak and not just noise
+    # The threshold is calculated as a percentage of the maximum peak found
+    height_threshold = np.max(np.abs(dV_dI_smooth)) * prominence
+    peak_indices, properties = find_peaks(dV_dI_smooth, height=height_threshold)
+    
+    # 4. Select the best candidates if there are too many
+    if len(peak_indices) > quantity:
+        # Sort by peak height (largest voltage jumps first)
+        heights = properties['peak_heights']
+        # Get indices of the 'quantity' highest peaks
+        best_indices = np.argsort(heights)[-quantity:]
+        peak_indices = peak_indices[best_indices]
+        # Reorder to keep chronological current order
+        peak_indices.sort()
+        
+    return currents[peak_indices]
+
+
+def calculate_diode_efficiency(ic_positive, ic_negative):
+    """
+    Calculates the superconducting diode efficiency (eta) for arrays of critical currents.
+    
+    Formula: eta = (Ic+ - |Ic-|) / (Ic+ + |Ic-|)
+
+    param: ic_positive: np.array
+    param: ic_negative: np.array
+    
     Returns:
-    np.array: Array of critical current values where significant voltage changes occur.
-    '''
-    j = jo
-    initial_size = quantity + 1
-    critic_regions = np.empty(initial_size)
-    while np.size(critic_regions) > quantity:
-        if (np.size(critic_regions) - quantity) < 0.1 and (np.size(critic_regions) - quantity) > 0:
-            break
-        if j == 1:
-            break
-        critic_regions = critic_guess(currents,voltages,j)
-        j += 0.01
-    return critic_regions
+    --------
+    np.array
+        Array with efficiency values (-1 to 1).
+    """
+    # Ensure they are numpy arrays
+    I_plus = np.array(ic_positive)
+    
+    # Take absolute value for safety, in case -15 uA is passed instead of 15 uA
+    I_minus = np.abs(np.array(ic_negative))
+    
+    # Verify they have the same size
+    if I_plus.shape != I_minus.shape:
+        # Ideally handle mismatch or raise error. 
+        # For simplicity, we raise an error here to alert the user.
+        raise ValueError(f"Arrays must have the same size. Ic+: {I_plus.shape}, Ic-: {I_minus.shape}")
 
-def critic_currents_augmentation(device, critic_regions, current_bounds, B=1.0, steps=3, critic_steps=10, epsilon=0.5):
-    '''
-    A function that applies a current sweep with more defined calculations around the critic currents.
-    :param current_bounds: Dictionary with "initial" and "final".
-    '''
+    # Calculate denominator avoiding division by zero
+    denominator = I_plus + I_minus
     
-    # Store the arrays chunks here, then concatenate at the end
-    all_currents_chunks = []
-    all_voltages_chunks = []
-    
-    # Start point for the sweep
-    current_cursor = current_bounds["initial"]
-    final_limit = current_bounds["final"]
-    j = 0
-    # 1. Loop through critical regions
-    for i in critic_regions:
-        # Define the critical window
-        co = i - epsilon
-        cf = i + epsilon
+    # Handle zeros: if both currents are 0, efficiency is 0 (or undefined, we set 0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        eta = (I_plus - I_minus) / denominator
+        # Where denominator is 0, set eta to 0
+        eta[denominator == 0] = 0.0
         
-        # Ensure we don't go backwards if regions overlap
-        if current_cursor < co:
-            # We subtract a small offset to ensure we don't duplicate the start of the critical region
-            previous_currents = np.linspace(current_cursor, co, steps, endpoint=False)
-            
-            if len(previous_currents) > 0:
-                previous_voltages = current_application(device, previous_currents, B_field=B)
-                all_currents_chunks.append(previous_currents)
-                all_voltages_chunks.append(previous_voltages)
-        
-        # --- CRITICAL (FINE) INTERVAL ---
-        critic_currents = np.linspace(co, cf, critic_steps)
-        critic_voltages = current_application(device, critic_currents, B_field=B)
-        
-        all_currents_chunks.append(critic_currents)
-        all_voltages_chunks.append(critic_voltages)
-        j+=1
-        print(f'Critical region {j}/{np.size(critic_regions)} at I = {i:.2f} µA processed.')
-        
-        # Update the cursor to the end of this critical region
-        # Using a small offset to avoid overlapping points in the next linspace
-        current_cursor = cf
- 
-        
-    # 2. Final Interval (after the last critical region)
-    if current_cursor < final_limit:
-        final_currents = np.linspace(current_cursor, final_limit, steps)
-        final_voltages = current_application(device, final_currents, B_field=B)
-        all_currents_chunks.append(final_currents)
-        all_voltages_chunks.append(final_voltages)
+    return eta
 
-    # 3. Concatenate all data
-    total_currents = np.concatenate(all_currents_chunks)
-    total_voltages = np.concatenate(all_voltages_chunks)
-    
-    # Sort the data just in case intervals overlapped or were out of order
-    sort_indices = np.argsort(total_currents)
-    total_currents = total_currents[sort_indices]
-    total_voltages = total_voltages[sort_indices]
-    
+#Varying height function for current increments
+########################################################
 
-    # 4. Plotting (Done once at the end)
-    plot_info = {
-        "fig_name": "currents.jpg",
-        "title": f'Curva Voltaje vs Corriente ({current_bounds["initial"]}–{current_bounds["final"]} µA)',
-        "x": "Corriente $I$ [$\mu$A]",
-        "y": "Voltaje promedio $\\langle \Delta \\mu \\rangle$ [$V_0$]"
-    }
-    plot_info2 = {
-        "fig_name": "resistances.jpg",
-        "title": f'Resistencia vs Corriente ({current_bounds["initial"]}–{current_bounds["final"]} µA)',
-        "x": "Corriente $I$ [$\mu$A]",
-        "y": "Resistencia $dV/dI$ [$R_0$]"
-    }
-    total_resistance = find_resistance(total_currents, total_voltages)
-    plot_parameters(total_currents, total_voltages, plot_info)
-    plot_parameters(total_currents, total_resistance, plot_info2)
-    return total_currents, total_voltages,total_resistance
 
 
 def varying_increments(geometry_used,layer,MAX_EDGE_LENGTH_IV,dimensions,displacement,currents,file_path,deltay = 1,field = 1.0,terminals = [8,2],length=0.3):
@@ -1197,10 +1166,6 @@ def plot_parameter_sweep(solutions, labels, title="", order_path=None, orientati
     
     if order_path is not None:        
         fig.savefig(order_path, facecolor='white', bbox_inches='tight', pad_inches=0.05)
-
-    return fig, axes
+        return fig, axes
     
-    if order_path is not None:        
-        fig.savefig(order_path, facecolor='white', bbox_inches='tight', pad_inches=0.05)
-
     return fig, axes
