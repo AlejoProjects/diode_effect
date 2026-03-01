@@ -442,6 +442,7 @@ class building :
         self.max_edge_length_vortex = max_edge_length_iv
         self.smoothing_steps = 100
         device_prototype = create_device(geometry,layer,gp["dimensions"],incrementx=0,incrementy=0)
+       
 
         # --- FIX START ---
         # 1. Create the configuration list of dictionaries
@@ -496,6 +497,114 @@ class building :
             
         )
         return solution
+    def perform_sweep(self, currents, fields, heights, save_dir="", individual=False, device_view=True):
+        """
+        The unified 3-loop function.
+        Iterates over Heights -> Fields -> Currents.
+        """
+        solutions = []
+        labels = []
+        file_name = f'sweep_B_{len(fields)}_H_{len(heights)}_I_{len(currents)}.h5'
+        
+        total_steps = len(currents) * len(fields) * len(heights)
+        step_count = 0
+        
+        print(f"Starting sweep with {total_steps} simulations...")
+
+        for h in heights:
+            displacement = self.gp.get("displacement", 0)
+            device_prototype = create_device(
+                self.geometry,
+                self.layer,
+                self.gp["dimensions"],
+                # self.gp, # Removed duplicate arg if not needed by your create_device
+                incrementy=h,
+                device_view=device_view,
+                clear_device_view=device_view
+            )
+
+            current_segments = visualize_segments(device_prototype, view=False)
+            
+            device = add_multiple_terminals(
+                device_prototype,
+                current_segments,
+                self.terminal_dict,
+                self.layer,
+                self.max_edge_length_iv,
+                view_device=device_view,
+                stripe_length=self.gp["stripe_length"],
+                orientation=self.gp["orientation"]
+            )
+            
+            dynamic_terminal_names = [t.name for t in device.terminals]
+            if not dynamic_terminal_names:
+                print("\n[WARNING] Device has no terminals!")
+
+            for B in fields:
+                for I in currents:
+                    step_count += 1
+                    print(f"Simulating [{step_count}/{total_steps}]: H={h}, B={B}, I={I}", end='\r')
+                    
+                    terminal_currents = {}
+                    current_values = [I, -I]
+                    for idx, t_name in enumerate(dynamic_terminal_names):
+                        if idx < len(current_values):
+                            terminal_currents[t_name] = current_values[idx]
+
+                    sol = self.default_solution(
+                        file_name, 
+                        terminal_currents, 
+                        device=device, 
+                        vector_potential=B
+                    )
+                    
+                    solutions.append(sol)
+                    
+                    label_parts = []
+                    if len(heights) > 1: label_parts.append(f"h={h}")
+                    if len(fields) > 1: label_parts.append(f"B={B}mT")
+                    if len(currents) > 1: label_parts.append(f"I={I}uA")
+                    if not label_parts: label_parts.append(f"I={I}, B={B}")
+                    labels.append(", ".join(label_parts))
+
+                    if individual:
+                        exp_vor = "$\\vec{\\omega}=\\vec{\\nabla}\\times\\vec{K}$"
+                        exp_sp = "$\\mu/v_0$"
+                        titles_group = {
+                            "sheet_current": f'Sheet current density for {B} mT, {I} uA',
+                            "order_parameter": f'Order parameter for {B} mT, {I} uA',
+                            "vorticity": "Vorticity" + exp_vor,
+                            "scalar_potential": "Scalar potential" + exp_sp
+                        }
+                        save_p_scd = os.path.join(save_dir, f'scd_{B}_field_{I}ma.jpg') if save_dir else None
+                        save_p_op = os.path.join(save_dir, f'op_{B}_field_{I}ma.jpg') if save_dir else None
+                        
+                        self.plot_group(
+                            sol, (5,4), titles_group, 
+                            currentBool=True, titleBool=False, 
+                            order_path=save_p_scd, current_path=save_p_op, view=True
+                        )
+
+        print("\nSweep complete.")
+        
+        if len(solutions) > 0:
+            orient = "horizontal" if len(solutions) <= 4 else "vertical"
+            full_save_path = None
+            if save_dir:
+                full_save_path = os.path.join(save_dir, file_name + "_sweep_result.jpg")
+                
+            # FIX: Removed self. if plot_parameter_sweep is global
+            fig, axes = self.plot_parameter_sweep(
+                solutions, 
+                labels, 
+                orientation=orient,
+                order_path=full_save_path,
+                c_value=f"J={currents} , y = {heights}$mu m$"
+            )
+            plt.show()
+            
+        return solutions, labels
+   
     ######################################################################################
     #1) PLOTS
     ######################################################################################     
@@ -999,7 +1108,7 @@ class building :
     #3)Varying height function for current increments
     ########################################################
 
-    def find_critical_currents(self,currents, voltages, quantity=5, smooth_window=11, poly_order=3, prominence=0.1):
+    def find_critical_currents(self,currents, voltages, quantity:int=5, smooth_window:int=11, poly_order=3, prominence=0.1):
         """
         Finds critical currents (Ic) by analyzing peaks in the differential resistance (dV/dI).
         It is more robust to noise than the simple threshold method.
@@ -1081,96 +1190,113 @@ class building :
             eta[denominator == 0] = 0.0
             
         return eta
-    def varying_increments(self, heights, currents, save_dir, field=[1.0], device_view=True,del_info=True):
+    def varying_increments(self, heights, currents, save_dir, file_suffix="", field=0, device_view=True, del_info=True):
             '''
-            This function applies a current sweep to devices with varying heights.
+            Applies a current sweep to devices with varying heights.
+            
+            FIXES:
+            1. Uses lists for storage to prevent index/size errors.
+            2. Passes 'save_dir' down so temp files are created there (saving C: drive space).
+            3. Correct arguments for current_application.
             '''
-            size = np.size(heights)
             voltages_arr = []
-            resistance_arr = []    
-            for h in range(0,size):
-                print(h)
-                for B in range(len(field)):
-                    file_path = save_dir + f'/vert_dy_{h}'
-                    print(f" the height is {heights[h]}")
-                    
-                    # 1. Create the base prototype
-                    
-                    device_prototype = create_device(
-                        self.geometry,
-                        self.layer,
-                        self.gp["dimensions"],
-                        incrementy=heights[h],
-                        device_view=device_view,
-                        clear_device_view=del_info
-                    )
-
-                    # 2. Re-calculate segments
-                    current_segments = visualize_segments(device_prototype, view=False)
-                    
-                    # 3. Add terminals and MESH
-                    device = add_multiple_terminals(
-                        device_prototype,
-                        current_segments,
-                        self.terminal_dict,
-                        self.layer,
-                        self.max_edge_length_iv,
-                        view_device=device_view,
-                        stripe_length=self.gp.get("stripe_length", 0),
-                        orientation=self.gp.get("orientation", "vertical")
-                    )
-                    
-                    # Check terminals
-                    dynamic_terminal_names = [t.name for t in device.terminals]
-                    if not dynamic_terminal_names:
-                        print("\n[WARNING] Device has no terminals!")
-
-                    # FIX: Arguments passed in the correct order (device, currents, file_path)
-                    voltages, resistance = self.current_application(
-                        device, 
-                        currents, 
-                        file_path, 
-                        B_field=field[B],
-                        del_info=del_info
-                    )
-                    
-                    # Define plot info
-                    self.plot_info1 = {"fig_name": "currents.jpg", "title": f'current vs voltage for y={h+3}, field={field[B]}', "x": "current [$mA]", "y": "voltage V0"}
-                    self.plot_info2 = {"fig_name": "currents.jpg", "title": f'current vs resistance for dy={h+3}, field={field[B]}', "x": "current [$mA]", "y": "resistance R0"}
-                    
-                    # Plot
-                    self.plot_parameters(currents, voltages, self.plot_info1, plot_type="plot", dir_path=save_dir + f'/voltage_vs_current_deltay{h}_fiel{field[B]}.jpg', color_applied="blue")
-                    self.plot_parameters(currents, resistance, self.plot_info2, plot_type="plot", dir_path=save_dir + f'/voltage_vs_resistance_deltay{h}_fiel{field[B]}.jpg', color_applied="orange")
-                    
-                    # Append to lists
-                    voltages_arr.append(voltages)
-                    resistance_arr.append(resistance)
-
-                print(f"Result size: {np.size(voltages_arr)}")
-
+            resistance_arr = []
+            
+            # Ensure the main save directory exists
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
                 
+            # Create a specific temp folder in your SAVE_DIR (not on C:)
+            local_temp_root = os.path.join(save_dir, "_temp_files")
+            if not os.path.exists(local_temp_root):
+                os.makedirs(local_temp_root)
+
+            for i, h in enumerate(heights):
+                # Define specific sub-folder for this height
+                # We use this path for both saving results AND temporary files
+                current_save_path = os.path.join(save_dir, f'vert_dy_{i}')
+                if not os.path.exists(current_save_path):
+                    os.makedirs(current_save_path)
+                
+                print(f"--- Height iteration: {h} ---")
+                
+                # 1. Create Device
+              
+                device_prototype = create_device(
+                    self.geometry, 
+                    self.layer, 
+                    self.gp["dimensions"], 
+                    incrementy=h, 
+                    device_view=device_view
+                )
+
+                # 2. Add Terminals
+                current_segments = visualize_segments(device_prototype, view=False)
+                device = add_multiple_terminals(
+                    device_prototype, 
+                    current_segments, 
+                    self.terminal_dict, 
+                    self.layer, 
+                    self.max_edge_length_iv,
+                    view_device=device_view, stripe_length=self.gp.get("stripe_length", 0),
+                    orientation=self.gp.get("orientation", "vertical")
+                )
+
+                # 3. Apply Currents
+                # We pass 'local_temp_root' to force temp files to be created on your data drive
+                voltages, resistance = self.current_application(
+                    device, 
+                    currents, 
+                    current_save_path, 
+                    B_field=field,
+                    temp_dir_root=local_temp_root,
+                    del_info=del_info
+                )
+                
+                # 4. Save & Plot
+                self.plot_info1 = {"fig_name": "currents.jpg", "title": f'I vs V (dy={h})', "x": "current [uA]", "y": "voltage [V0]"}
+                self.plot_info2 = {"fig_name": "currents.jpg", "title": f'I vs R (dy={h})', "x": "current [uA]", "y": "resistance [R0]"}
+                
+                plot_filename_v = f'voltage_vs_current_dy{i}_{file_suffix}.jpg'
+                plot_filename_r = f'voltage_vs_resistance_dy{i}_{file_suffix}.jpg'
+                
+                self.plot_parameters(currents, voltages, self.plot_info1, plot_type="plot", 
+                                    dir_path=os.path.join(current_save_path, plot_filename_v), color_applied="blue")
+                self.plot_parameters(currents, resistance, self.plot_info2, plot_type="plot", 
+                                    dir_path=os.path.join(current_save_path, plot_filename_r), color_applied="orange")
+                
+                # Store results
+                voltages_arr.append(voltages)
+                resistance_arr.append(resistance)
+
             return voltages_arr, resistance_arr
 
-    def current_application(self, device, currents, file_path, B_field=0,del_info=True):
+    def current_application(self, device, currents, file_path, B_field=0, temp_dir_root=None, del_info=True):
         '''
-        A function that applies a current sweep to a device and returns the corresponding voltages.
+        Applies current sweep.
+        
+        FIXES:
+        1. 'dir=temp_dir_root' in TemporaryDirectory forces creation on the correct drive.
+        2. Explicit garbage collection (del solution_c) to free memory/file handles.
         '''
         voltages = []
-        # =========================================================
-        # Simulation
-        # =========================================================
-        start_time = time.time()
-        total_simulations = len(currents)
-        j = 0
         
-        with tempfile.TemporaryDirectory(prefix='electro2_') as temp_dir:
-            for I in currents:
-                filename = f'solution_I_{I:.1f}.h5'
-                applied_currents = {
-                    "term_s": I,
-                    "term_d": -I
-                }
+        # If no temp root provided, fallback to file_path, else current dir
+        if temp_dir_root is None:
+            temp_dir_root = file_path if os.path.exists(file_path) else os.getcwd()
+
+        start_time = time.time()
+        
+        # FIX: Force temp dir to be in your specific storage path
+        with tempfile.TemporaryDirectory(dir=temp_dir_root, prefix="sim_temp_") as temp_dir:
+            for j, I in enumerate(currents):
                 
+                # Unique filename per step
+                filename = os.path.join(temp_dir, f'solution_step_{j}.h5')
+                
+                applied_currents = {"term_s": I, "term_d": -I}
+                
+                # Run Solver
                 solution_c = self.default_solution(
                     filename,
                     applied_currents, 
@@ -1178,35 +1304,43 @@ class building :
                     vector_potential=B_field
                 )
                 
+                # Extract Data
                 dynamics = solution_c.dynamics
                 indices = dynamics.time_slice(tmin=120)
                 voltage = np.abs(np.mean(dynamics.voltage()[indices]))
                 voltages.append(voltage)
                 
-                j += 1
-                print(f"I = {I:.1f} µA, <V> = {voltage:.4f} V₀, progress: {np.round(j/len(currents)*100,2)}%", end='\r')
+                # Progress
+                progress = (j + 1) / len(currents) * 100
+                print(f"I={I:.1f}uA, V={voltage:.4f} [Progress: {progress:.1f}%]", end='\r')
                 
-                if os.path.exists(filename):
-                    os.remove(filename)
+                # CRITICAL: Close solution to release file handle immediately
+                if hasattr(solution_c, 'close'):
+                    solution_c.close()
+                del solution_c 
+                
+                # Try to remove file immediately to save space
+                try:
+                    if os.path.exists(filename):
+                        os.remove(filename)
+                except Exception:
+                    pass # TempDir cleanup will catch it later if this fails
+
+        # Calculate Resistance
+        if len(currents) > 1:
+            resistances = self.find_resistance(currents, voltages)
+        else:
+            resistances = [v/c if c!=0 else 0 for v, c in zip(voltages, currents)]
+
+        # Save Data
+        dd.save_data((currents, voltages), os.path.join(file_path, 'voltage_vs_current.txt'), "currents(uA) Voltages(V0)")
+        dd.save_data((currents, resistances), os.path.join(file_path, 'resistance_vs_current.txt'), "currents(uA) resistances(R0)")
         
-        # Ensure lists are converted to numpy arrays if required by find_resistance
-        # But keeping lists as per your structure implies find_resistance handles them.
-        resistances = self.find_resistance(currents, voltages)
-        
-        dd.save_data((currents, voltages), file_path+'voltage_vs_current.txt', "currents(µA)  Voltages(V0)")
-        dd.save_data((currents, resistances), file_path +'resistance_vs_current.txt', "currents(µA)  resistances(R0)")
-        if del_info == True:
-            clear_output(wait=True)
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        elapsed_minutes = elapsed_time/60
-        
-        print(" " * 60, end='\r') 
-        print("-" * 50)
-        print(f"✅ The simulation was completed with {total_simulations} steps.")
-        print(f"⏱️ The elapsed time was: {elapsed_time:.2f} seconds.")
-        print(f"⏱️ The elapsed time was: {elapsed_minutes:.2f} minutes.")
-        print(f"📊 Mean time per step was: {(elapsed_time / total_simulations):.2f} seconds.")
-        print("-" * 50)
+        # Print Stats
+        total_time = time.time() - start_time
+        print("\n" + "-"*50)
+        print(f"✅ Simulation Complete. Time: {total_time:.2f}s ({total_time/len(currents):.2f}s/step)")
+        print("-"*50)
         
         return voltages, resistances
+        
