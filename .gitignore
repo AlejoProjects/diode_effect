@@ -1,8 +1,11 @@
 *.jpeg
 *.jpg 
 *.txt
+!requirements.txt
 magnetizacion_vs_B.txt
 .ipynb_checkpoints/
+.venv/
+venv/
 project_field_h5_files/
 figures/
 figures_vertical/

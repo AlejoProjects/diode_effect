@@ -1,0 +1,16 @@
+# Supported project environment: Python 3.10-3.14 (Python 3.12 recommended).
+# These compatible-release ranges avoid accidental major-version upgrades while
+# still allowing security and bug-fix releases. pyTDGL brings its own transitive
+# geometry, meshing, units, and solver dependencies.
+
+# TDGL solver and scientific stack
+tdgl>=0.9,<0.10
+numpy>=1.26,<3
+scipy>=1.11,<2
+matplotlib>=3.8,<4
+h5py>=3.10,<4
+
+# Notebook runtime
+ipython>=8.20,<10
+ipykernel>=6.29,<7
+jupyterlab>=4.2,<5

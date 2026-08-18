@@ -1,74 +1,84 @@
-from tdgl.visualization.animate import create_animation
 from scipy.signal import find_peaks, savgol_filter
-from shapely.geometry import LineString, Point
-from IPython.display import HTML, display
 from IPython.display import clear_output
 from tdgl.sources import ConstantField
-from tdgl.geometry import box, circle
+from tdgl.geometry import box
 import default_directories as dd
+from diode_analysis import (
+    critical_current_at_voltage,
+    differential_resistance,
+    diode_efficiency,
+    finite_1d as _as_finite_1d,
+    validate_iv_data as _validate_iv_data,
+)
 import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
-import matplotlib.tri as mtri
 import numpy as np
 import tempfile
 import string
 import tdgl
 import time
 import os
+
 def create_terminal_dictionary(terminals,names):
-        my_terminals = []
-        for term_id, term_name in zip(terminals, names):
-            my_terminals.append({"id": term_id, "name": term_name})
-        return my_terminals
+        if len(terminals) != len(names):
+            raise ValueError("terminals and names must have the same length")
+        return [
+            {"id": int(term_id), "name": str(term_name)}
+            for term_id, term_name in zip(terminals, names)
+        ]
 def create_dictionary(ids_names,values):
-        my_dict = {}
-        for id_name, value in zip(ids_names, values):
-            my_dict[id_name] = value
-        return my_dict
+        if len(ids_names) != len(values):
+            raise ValueError("ids_names and values must have the same length")
+        return dict(zip(ids_names, values))
 # #################################################################################
 # =================================================================================
 ## Device functions 
 # =================================================================================
 # #################################################################################
-def create_device(geometry_added,layer,dimensions,incrementx=0.0,incrementy=0.0,translationy=0,device_view=True,clear_device_view=True):
-    '''
-    Since we're using the same geometry, this function is implemented so we can change the dimensions of the right rectangle hence the position of the drain too : tdgl.polygon object,
-    :param geometry_used: tdgl.polygon object,
-    :param geometry_added: tdgl.polygon object,
-    :param max_edge_length:int,
-    :param incrementx:float
-    :param incrementy:float
-    :param source_dimension: array [width,height]
-    :param drain_dimension: array [width,height]
-    :param translationx:float
-    :param translationy:float
-    The translations move the source and drain along the polygon
-    '''
-    width_x = dimensions['width_x']
+def create_device(
+    geometry_added,
+    layer,
+    dimensions,
+    incrementx=0.0,
+    incrementy=0.0,
+    translationy=0.0,
+    device_view=True,
+    clear_device_view=True,
+    length_units="um",
+):
+    """Build the asymmetric bridge used by the simulations.
 
-    width_x2 = dimensions['width_x2']
-    height_y2 = dimensions['height_y2']
-    #for points that are the same as the  film width
-    real_size_x = width_x2 + incrementx
-    real_size_y =3 + incrementy
-    film_poly_up = tdgl.Polygon("film_pequeño", points=box(width=real_size_x, height= real_size_y)).translate(dx=+width_x/2)
+    ``geometry_added`` contains the central film and left arm. A right arm is
+    added with width ``dimensions['width_x2']`` and baseline height
+    ``dimensions.get('right_height_y', 3.0)``. The historical 3 µm baseline is
+    retained, but is now explicit and configurable.
+
+    All geometry values are expressed in ``device.length_units`` (micrometres in
+    the supplied notebook).
+    """
+    width_x = float(dimensions["width_x"])
+    width_x2 = float(dimensions["width_x2"])
+    right_height_y = float(dimensions.get("right_height_y", 3.0))
+    real_size_x = width_x2 + float(incrementx)
+    real_size_y = right_height_y + float(incrementy)
+    if width_x <= 0 or real_size_x <= 0 or real_size_y <= 0:
+        raise ValueError("device widths and heights must be positive")
+
+    film_poly_up = tdgl.Polygon(
+        "film_right_arm", points=box(width=real_size_x, height=real_size_y)
+    ).translate(dx=width_x / 2, dy=float(translationy))
     combined_geometry = geometry_added.union(film_poly_up)
     combined_film = combined_geometry
     device = tdgl.Device(
-        "vertical_bridge",
+        "asymmetric_bridge",
         layer=layer,
         film=combined_film,
         holes=[],
-        length_units="um",
+        length_units=length_units,
     )
-    #device.make_mesh(max_edge_length=max_edge_length, smooth=smoothing_steps)
-    #Remove to se more details about the mesh
-    #There are 4 malformed cells as of now , 4/5030
-    if clear_device_view == True:
+    if clear_device_view:
         clear_output(wait=True)
-    #print(f"  Malla creada: {len(device.mesh.sites)} puntos")
-    if device_view == True:
-        fig, ax = device.draw(figsize=(10, 4))
+    if device_view:
+        device.draw(figsize=(10, 4))
     return device
 
 def visualize_segments(device,view=True):
@@ -124,24 +134,33 @@ def add_terminals_by_id(device, segments, source_id, drain_id, layer, max_edge_l
     """
     new_terminals = list(device.terminals)
     
-    if source_id >= len(segments) or drain_id >= len(segments):
-        raise ValueError(f"IDs must be less than {len(segments)}")
+    if source_id == drain_id:
+        raise ValueError("source_id and drain_id must identify different segments")
+    if any(index < 0 or index >= len(segments) for index in (source_id, drain_id)):
+        raise ValueError(f"segment IDs must be in the range [0, {len(segments) - 1}]")
+    device_center = np.mean(np.asarray(device.film.points), axis=0)
 
     # --- 1. Create Source ---
     seg_s = segments[source_id]
-    term_s = create_terminal_from_segment(seg_s, "_new_source", pct=width_pct, stripe_length=stripe_length)
+    term_s = create_terminal_from_segment(
+        seg_s, "_new_source", pct=width_pct, stripe_length=stripe_length,
+        device_center=device_center,
+    )
     new_terminals.append(term_s)
     
     # Calculate Probe 1 (Source Side)
-    probe_s = get_inward_probe_point(seg_s, depth=probe_depth)
+    probe_s = get_inward_probe_point(seg_s, depth=probe_depth, device_center=device_center)
     
     # --- 2. Create Drain ---
     seg_d = segments[drain_id]
-    term_d = create_terminal_from_segment(seg_d, "_new_drain", pct=width_pct, stripe_length=stripe_length)
+    term_d = create_terminal_from_segment(
+        seg_d, "_new_drain", pct=width_pct, stripe_length=stripe_length,
+        device_center=device_center,
+    )
     new_terminals.append(term_d)
     
     # Calculate Probe 2 (Drain Side)
-    probe_d = get_inward_probe_point(seg_d, depth=probe_depth)
+    probe_d = get_inward_probe_point(seg_d, depth=probe_depth, device_center=device_center)
 
     # --- 3. Update Device Probe Points ---
     # We replace the old probes with these new ones tailored to the current path
@@ -263,13 +282,23 @@ def define_circle(p1, p2, p3):
     center = np.array([Ux, Uy])
     radius = np.linalg.norm(center - p1)
     return center, radius
-def create_terminal_from_segment(segment, name_suffix, pct=100, stripe_length=0.01):
+def create_terminal_from_segment(
+    segment, name_suffix, pct=100, stripe_length=0.01, device_center=None
+):
     """
     Creates a terminal extension attached to the segment with a fixed stripe_length.
     """
-    pts = segment['points']
+    if not 0 < pct <= 100:
+        raise ValueError("pct must be in the interval (0, 100]")
+    if stripe_length <= 0:
+        raise ValueError("stripe_length must be positive")
+
+    pts = np.asarray(segment['points'], dtype=float)
     p_start = pts[0]
     p_end = pts[-1]
+    if device_center is None:
+        device_center = np.zeros(2)
+    device_center = np.asarray(device_center, dtype=float)
     
     # 1. Determine size scaling (width along the edge)
     if pct < 100:
@@ -284,13 +313,15 @@ def create_terminal_from_segment(segment, name_suffix, pct=100, stripe_length=0.
     
     if segment['type'] == 'line':
         tangent = p_end - p_start
+        tangent_norm = np.linalg.norm(tangent)
+        if tangent_norm == 0:
+            raise ValueError("cannot create a terminal from a zero-length segment")
         # Rotate 90 degrees to get a normal
         normal = np.array([-tangent[1], tangent[0]]) 
-        normal = normal / np.linalg.norm(normal)
+        normal = normal / tangent_norm
         
-        # Ensure normal points OUTWARD (away from center 0,0)
-        # We assume the device is centered roughly at (0,0)
-        if np.dot(normal, segment_mid) < 0:
+        # Ensure normal points outward from the actual device center.
+        if np.dot(normal, segment_mid - device_center) < 0:
             normal = -normal
             
         # Extrude by exactly STRIPE_LENGTH
@@ -323,24 +354,35 @@ def create_terminal_from_segment(segment, name_suffix, pct=100, stripe_length=0.
         
         t_pts = np.vstack([pts, outer_arc[::-1]])
 
+    else:
+        raise ValueError(f"unsupported segment type: {segment.get('type')!r}")
+
     return tdgl.Polygon(f"term{name_suffix}", points=t_pts)
-def get_inward_probe_point(segment, depth=1.0):
+def get_inward_probe_point(segment, depth=1.0, device_center=None):
     """
     Calculates a point 'depth' units inside the device from the segment center.
     """
-    pts = segment['points']
+    if depth <= 0:
+        raise ValueError("depth must be positive")
+    pts = np.asarray(segment['points'], dtype=float)
     p_start = pts[0]
     p_end = pts[-1]
     segment_mid = (p_start + p_end) / 2
+    if device_center is None:
+        device_center = np.zeros(2)
+    device_center = np.asarray(device_center, dtype=float)
     
     if segment['type'] == 'line':
         tangent = p_end - p_start
+        tangent_norm = np.linalg.norm(tangent)
+        if tangent_norm == 0:
+            raise ValueError("cannot place a probe from a zero-length segment")
         normal = np.array([-tangent[1], tangent[0]])
-        normal = normal / np.linalg.norm(normal)
+        normal = normal / tangent_norm
         
-        # We want the INWARD normal (towards 0,0)
+        # We want the inward normal (towards the actual device center).
         # If dot product is positive, it points outward, so flip it
-        if np.dot(normal, segment_mid) > 0:
+        if np.dot(normal, segment_mid - device_center) > 0:
             normal = -normal
             
         return segment_mid + (normal * depth)
@@ -352,23 +394,47 @@ def get_inward_probe_point(segment, depth=1.0):
         vec_unit = vec_to_arc / np.linalg.norm(vec_to_arc)
         # Move backwards (inward) from the arc
         return segment_mid - (vec_unit * depth)
-def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_length, width_pct=100, stripe_length=0.01, central_probe_separation=3.0, orientation="horizontal",sep_constant=0.7,view_device=True):
+    raise ValueError(f"unsupported segment type: {segment.get('type')!r}")
+def add_multiple_terminals(
+    device, segments, terminal_configs, layer, max_edge_length, width_pct=100,
+    stripe_length=0.01, central_probe_separation=3.0, orientation="horizontal",
+    sep_constant=0.7, view_device=True, smoothing_steps=100,
+):
     """
     Adds multiple terminals and REPLACES existing probes with exactly 2 central probes.
     
     :param orientation: "horizontal" (default) aligns probes along X-axis. 
                         "vertical" aligns probes along Y-axis.
     """
+    if len(terminal_configs) < 2:
+        raise ValueError("at least two terminal configurations are required")
+    if central_probe_separation <= 0 or sep_constant <= 0:
+        raise ValueError("probe separation parameters must be positive")
+    if max_edge_length <= 0 or smoothing_steps < 0:
+        raise ValueError("max_edge_length must be positive and smoothing_steps non-negative")
+    orientation = orientation.lower()
+    if orientation not in {"horizontal", "vertical"}:
+        raise ValueError("orientation must be 'horizontal' or 'vertical'")
+
     new_terminals = list(device.terminals)
+    all_points = np.vstack([s['points'] for s in segments])
+    device_center = np.mean(all_points, axis=0)
+    existing_names = {terminal.name for terminal in new_terminals}
+    requested_names = [str(config["name"]) for config in terminal_configs]
+    if len(set(requested_names)) != len(requested_names):
+        raise ValueError("terminal names must be unique")
+    if existing_names.intersection(f"term_{name}" for name in requested_names):
+        raise ValueError("a requested terminal name already exists on the device")
     
     # 1. Add All Requested Terminals
     for config in terminal_configs:
         seg_id = config['id']
         name_suffix = f"_{config['name']}"
         
-        if seg_id >= len(segments):
-            print(f"Warning: Segment ID {seg_id} out of range. Skipping.")
-            continue
+        if seg_id < 0 or seg_id >= len(segments):
+            raise ValueError(
+                f"terminal segment ID {seg_id} is outside [0, {len(segments) - 1}]"
+            )
 
         seg = segments[seg_id]
         
@@ -377,16 +443,14 @@ def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_l
             seg, 
             name_suffix, 
             pct=width_pct, 
-            stripe_length=stripe_length
+            stripe_length=stripe_length,
+            device_center=device_center,
         )
         new_terminals.append(term_poly)
 
     # 2. Probe Placement (Central Intersection)
-    all_points = np.vstack([s['points'] for s in segments])
-    device_center = np.mean(all_points, axis=0)
-    
     # Determine direction based on orientation parameter
-    if orientation.lower() == "vertical":
+    if orientation == "vertical":
         # Align along Y-axis
         flow_dir = np.array([0.0, 1.0])
     else:
@@ -417,8 +481,8 @@ def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_l
     
     # 4. Remesh & Plot
     print(f"Remeshing... Probes placed {central_probe_separation}um apart at center ({orientation}).")
-    new_device.make_mesh(max_edge_length=max_edge_length, smooth=100)
-    if view_device == True:
+    new_device.make_mesh(max_edge_length=max_edge_length, smooth=int(smoothing_steps))
+    if view_device:
         fig, ax = new_device.plot(mesh=True)
     
          # Visual confirmation of probes
@@ -427,8 +491,19 @@ def add_multiple_terminals(device, segments, terminal_configs, layer, max_edge_l
     return new_device
 
 
-class building :
-    def __init__(self,name,geometry,layer,terminals,terminal_names,gp,segments_found):
+class Building:
+    """Simulation façade for an asymmetric superconducting bridge."""
+
+    def __init__(self,name,geometry,layer,terminals,terminal_names,gp,segments_found=None):
+        required_parameters = {
+            "xi", "dimensions", "stripe_length", "orientation",
+            "field_units", "current_units", "length_units",
+        }
+        missing = required_parameters.difference(gp)
+        if missing:
+            raise ValueError(f"missing global parameters: {sorted(missing)}")
+        if gp["xi"] <= 0:
+            raise ValueError("coherence length xi must be positive")
         self.name = name
         self.geometry = geometry
         self.layer = layer
@@ -437,37 +512,43 @@ class building :
         self.terminal_dict = create_terminal_dictionary(terminals,terminal_names)
         self.tempdir = tempfile.TemporaryDirectory()
         self.gp = gp
-        max_edge_length_iv =gp["xi"] / 1.5
+        max_edge_length_iv = gp["xi"] / 1.5
         self.max_edge_length_iv=  max_edge_length_iv
         self.max_edge_length_vortex = max_edge_length_iv
-        self.smoothing_steps = 100
-        device_prototype = create_device(geometry,layer,gp["dimensions"],incrementx=0,incrementy=0)
-       
-
-        # --- FIX START ---
-        # 1. Create the configuration list of dictionaries
-        terminal_configs = []
-        for t_id, t_name in zip(terminals, terminal_names):
-            terminal_configs.append({"id": t_id, "name": t_name})
-
-        # 2. Pass 'terminal_configs' instead of 'terminals'
+        self.smoothing_steps = int(gp.get("smoothing_steps", 100))
+        device_prototype = create_device(
+            geometry, layer, gp["dimensions"], incrementx=0, incrementy=0,
+            length_units=gp["length_units"],
+        )
+        # Recompute the boundary from this exact geometry. ``segments_found`` is
+        # retained in the signature for compatibility with older notebooks.
+        del segments_found
+        current_segments = visualize_segments(device_prototype, view=False)
         self.default_device = add_multiple_terminals(
             device_prototype,
-            segments_found,
-            terminal_configs,  # <--- CHANGED FROM terminals TO terminal_configs
+            current_segments,
+            self.terminal_dict,
             layer,
             max_edge_length_iv,
             stripe_length=gp["stripe_length"],
             orientation=gp["orientation"],
+            smoothing_steps=self.smoothing_steps,
         )
 
  
     def default_options(self,d_filename,skip_t=200,solve_t=200,saves=200):
-   
-        options =  tdgl.SolverOptions(
+        if skip_t < 0 or solve_t <= 0 or saves <= 0:
+            raise ValueError("skip_t must be non-negative; solve_t and saves must be positive")
+        output_path = (
+            d_filename
+            if os.path.isabs(d_filename)
+            else os.path.join(self.tempdir.name, d_filename)
+        )
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        options = tdgl.SolverOptions(
         skip_time=skip_t,  # initial relaxation time
         solve_time=solve_t,  # Real simulation time
-        output_file=os.path.join(self.tempdir.name,d_filename),  # file route
+        output_file=output_path,
         field_units=self.gp["field_units"],  #Units of the applied field (miliTesla)
         current_units=self.gp["current_units"],  # Units of the applied current (microamperios)
         save_every=saves,
@@ -480,7 +561,22 @@ class building :
         '''
         if device is None:
             device = self.default_device
-            
+
+        terminal_names = [terminal.name for terminal in device.terminals]
+        unknown_names = set(terminal_currents_applied).difference(terminal_names)
+        if unknown_names:
+            raise ValueError(f"unknown terminal names: {sorted(unknown_names)}")
+        terminal_currents_applied = {
+            name: float(terminal_currents_applied.get(name, 0.0))
+            for name in terminal_names
+        }
+        total_current = sum(terminal_currents_applied.values())
+        if not np.isclose(total_current, 0.0, atol=1e-12):
+            raise ValueError(
+                f"terminal currents must sum to zero; received {total_current:g} "
+                f"{self.gp['current_units']}"
+            )
+
         options = self.default_options(file_name)
         
         external_field = ConstantField(
@@ -502,6 +598,12 @@ class building :
         The unified 3-loop function.
         Iterates over Heights -> Fields -> Currents.
         """
+        currents = _as_finite_1d(currents, "currents")
+        fields = _as_finite_1d(fields, "fields")
+        heights = _as_finite_1d(heights, "heights")
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+
         solutions = []
         labels = []
         file_name = f'sweep_B_{len(fields)}_H_{len(heights)}_I_{len(currents)}.h5'
@@ -512,7 +614,6 @@ class building :
         print(f"Starting sweep with {total_steps} simulations...")
 
         for h in heights:
-            displacement = self.gp.get("displacement", 0)
             device_prototype = create_device(
                 self.geometry,
                 self.layer,
@@ -520,7 +621,8 @@ class building :
                 # self.gp, # Removed duplicate arg if not needed by your create_device
                 incrementy=h,
                 device_view=device_view,
-                clear_device_view=device_view
+                clear_device_view=device_view,
+                length_units=self.gp["length_units"],
             )
 
             current_segments = visualize_segments(device_prototype, view=False)
@@ -533,23 +635,22 @@ class building :
                 self.max_edge_length_iv,
                 view_device=device_view,
                 stripe_length=self.gp["stripe_length"],
-                orientation=self.gp["orientation"]
+                orientation=self.gp["orientation"],
+                smoothing_steps=self.smoothing_steps,
             )
             
             dynamic_terminal_names = [t.name for t in device.terminals]
-            if not dynamic_terminal_names:
-                print("\n[WARNING] Device has no terminals!")
+            if len(dynamic_terminal_names) < 2:
+                raise ValueError("the sweep device must have at least two terminals")
 
             for B in fields:
                 for I in currents:
                     step_count += 1
                     print(f"Simulating [{step_count}/{total_steps}]: H={h}, B={B}, I={I}", end='\r')
                     
-                    terminal_currents = {}
-                    current_values = [I, -I]
-                    for idx, t_name in enumerate(dynamic_terminal_names):
-                        if idx < len(current_values):
-                            terminal_currents[t_name] = current_values[idx]
+                    terminal_currents = dict.fromkeys(dynamic_terminal_names, 0.0)
+                    terminal_currents[dynamic_terminal_names[0]] = I
+                    terminal_currents[dynamic_terminal_names[1]] = -I
 
                     sol = self.default_solution(
                         file_name, 
@@ -576,13 +677,13 @@ class building :
                             "vorticity": "Vorticity" + exp_vor,
                             "scalar_potential": "Scalar potential" + exp_sp
                         }
-                        save_p_scd = os.path.join(save_dir, f'scd_{B}_field_{I}ma.jpg') if save_dir else None
-                        save_p_op = os.path.join(save_dir, f'op_{B}_field_{I}ma.jpg') if save_dir else None
+                        save_p_scd = os.path.join(save_dir, f'scd_B{B}_I{I}uA.jpg') if save_dir else None
+                        save_p_op = os.path.join(save_dir, f'op_B{B}_I{I}uA.jpg') if save_dir else None
                         
                         self.plot_group(
                             sol, (5,4), titles_group, 
                             currentBool=True, titleBool=False, 
-                            order_path=save_p_scd, current_path=save_p_op, view=True
+                            order_path=save_p_op, current_path=save_p_scd, view=True
                         )
 
         print("\nSweep complete.")
@@ -599,7 +700,7 @@ class building :
                 labels, 
                 orientation=orient,
                 order_path=full_save_path,
-                c_value=f"J={currents} , y = {heights}$mu m$"
+                c_value=f"I={currents} {self.gp['current_units']}, Δy={heights} µm"
             )
             plt.show()
             
@@ -608,7 +709,10 @@ class building :
     ######################################################################################
     #1) PLOTS
     ######################################################################################     
-    def plot_solution(self, solution, order_title=None, current_title=None, currentBool=True, order_path=None, current_path=None, view=True):
+    def plot_solution(
+        self, solution, order_title=None, current_title=None, currentBool=True,
+        order_path=None, current_path=None, view=True, snapshot_time=None,
+    ):
             '''
             Graphs the applied current on the device and the phase for a fixed current/constant field 
             '''
@@ -642,12 +746,10 @@ class building :
                 else:
                     plt.close()
 
-            # Second plot: Order Parameter
-            # Plot a snapshot of the order parameter in the middle of a phase slip
-            t0 = 155
-            # Ensure we don't crash if t0 is out of bounds
-            if solution.solve_step is not None:
-                solution.solve_step = solution.closest_solve_step(t0)
+            # Select a time explicitly when a phase-slip snapshot is desired.
+            # Otherwise preserve the caller's current solve step.
+            if snapshot_time is not None:
+                solution.solve_step = solution.closest_solve_step(snapshot_time)
             
             if order_title is None:
                 fig, axes = solution.plot_order_parameter(figsize=(10, 4))
@@ -783,8 +885,11 @@ class building :
 
     def plot_phase_gradient(self,solution, ax=None):
         """
-        Calculates and plots the magnitude of the Phase Gradient.
-        Physically, this represents the superfluid velocity.
+        Plot ``|K_s| / |psi|²`` as a phase-gradient-like diagnostic.
+
+        This is a useful dimensionless proxy away from vortex cores, not a direct
+        SI-valued superfluid velocity: the GL current also contains gauge and
+        normalization factors.
         """
         if ax is None:
             fig, ax = plt.subplots(figsize=(6, 5))
@@ -807,29 +912,35 @@ class building :
         
         # We divide J by rho to get the velocity (phase gradient)
         # We add a tiny epsilon (1e-6) to rho to avoid dividing by zero in vortex cores
-        phase_grad_mag = J_mag / (rho + 1e-6)
+        phase_grad_mag = np.divide(
+            J_mag,
+            rho,
+            out=np.full_like(J_mag, np.nan, dtype=float),
+            where=rho >= 0.05,
+        )
         
         # 4. Mask Vortex Cores
         # Inside a vortex, density is 0, so the gradient is mathematically infinite/undefined.
         # We mask these out for a cleaner plot.
-        phase_grad_mag[rho < 0.05] = np.nan
-
         # 5. Plot
         device = solution.device
         x, y = device.points[:, 0], device.points[:, 1]
         triangles = device.triangles
 
+        finite_values = phase_grad_mag[np.isfinite(phase_grad_mag)]
+        if finite_values.size == 0:
+            raise ValueError("phase-gradient proxy is undefined because |psi|² is below 0.05 everywhere")
         im = ax.tripcolor(
             x, y, triangles, 
             phase_grad_mag, 
             shading="gouraud", 
             cmap="plasma",
-            vmax=np.nanpercentile(phase_grad_mag, 95) # Auto-scale to ignore spikes
+            vmax=np.percentile(finite_values, 95) # Auto-scale to ignore spikes
         )
         
         # Add Colorbar
         cbar = plt.colorbar(im, ax=ax)
-        #cbar.set_label(r"$|\nabla \phi|$ (Superfluid Velocity)")
+        cbar.set_label(r"$|K_s|/|\psi|^2$ (dimensionless proxy)")
         
 
         ax.set_aspect("equal")   
@@ -855,11 +966,9 @@ class building :
             raise ValueError("The 'solutions' list is empty. Please provide at least one solution to plot.")
 
         if len(labels) != n_sols:
-            raise ValueError(f"El número de etiquetas ({len(labels)}) debe coincidir con las soluciones ({n_sols}).")
-
-        
-        if len(labels) != n_sols:
-            raise ValueError(f"El número de etiquetas ({len(labels)}) debe coincidir con las soluciones ({n_sols}).")
+            raise ValueError(f"labels ({len(labels)}) must match solutions ({n_sols})")
+        if orientation not in {"vertical", "horizontal"}:
+            raise ValueError("orientation must be 'vertical' or 'horizontal'")
 
         # --- Plot dimensions  ---
         if orientation == "vertical":
@@ -931,7 +1040,7 @@ class building :
             
             # --- A) B) C) ---
             # En horizontal, 'i' avanza por columnas, así que la etiqueta va arriba de cada columna
-            seq_char = alphabet[i]
+            seq_char = alphabet[i] if i < len(alphabet) else f"{i + 1}"
             combined_label = f"{seq_char}) {label_text}"
             
             ax_psi.text(
@@ -985,7 +1094,8 @@ class building :
                 cbar_phase = fig.colorbar(im_phase_ref, cax=cax_phase)
                 cbar_phase.ax.tick_params(labelsize=8, length=2, pad=1)
                 cbar_phase.set_ticks([-1, 0, 1])
-                cbar_phase.set_ticklabels([r"$0$", "0.5", "1"])
+                cbar_phase.set_ticklabels([r"$-1$", "0", "1"])
+                cbar_phase.set_label(r"$\theta/\pi$")
                 cbar_phase.outline.set_visible(False) 
 
                 # 2. BARRA DE PSI (Derecha de psi) - RESTAURADA
@@ -1024,74 +1134,88 @@ class building :
     # =========================
     # 2) Magnetization function
     # =========================
-    def solve_field(self,field_o,field_f,field_steps,file_path,save_dir,device=None,d=0.1):
-        '''
-        A function that applies a magnetic field sweep to a device and returns the corresponding magnetizations and magnetic moments.
-        
-        :param device: tdgl.device object
-        :param field: List or array of magnetic field values to be applied.
-        :param d: Double, depth of the superconductor in micrometers (default is 0.1 µm).
-        :return: Two lists containing the total magnetic moments and volumetric magnetizations for each applied
-        '''
-        if device == None :
+    def solve_field(
+        self, field_o, field_f, field_steps, file_path=None, save_dir=None,
+        device=None, d=None,
+    ):
+        """Solve a zero-current field sweep and compute ``M=m/(area*d)``.
+
+        Magnetic field is expressed in ``gp['field_units']`` and thickness ``d``
+        in device length units. If ``d`` is omitted, the layer thickness from
+        ``gp['d']`` is used. ``file_path`` is retained as the legacy output-dir
+        argument; ``save_dir`` takes precedence when both are supplied.
+        """
+        if device is None:
             device = self.default_device
-        field = np.linspace(field_o,field_f,field_steps)  # External field on mT (B)
-        d = 0.1  # Superconductor depth in micrometers (µm)
-        area = np.sum(device.areas)  # effective area of the device ( µm²)
-        # =========================
-        # 3) External Field sweep
-        # =========================
-        # Defines a list of 10 values for the external magnetic field form 0 to 1 mT
-        moments = [] #total magnetic moment
-        magnetizations = []  # volumetric magnetization
-        # Loop for each value of B
-        dynamic_terminal_names = [t.name for t in device.terminals]
-        terminal_currents = {}
-                        
-                        # Map currents to the available terminals
-                        # We assume the last added terminals are the ones we want to drive, 
-                        # or that the order matches [Source, Drain].
-        current_values = [0, -0]
-                        
-                        # We map values to the detected names in order
-        for idx, t_name in enumerate(dynamic_terminal_names):
-            if idx < len(current_values):
-                terminal_currents[t_name] = current_values[idx]
-       
-        with tempfile.TemporaryDirectory(prefix="electro2_", suffix="_data") as temp_dir:
-            for B in field:
-                # Creates a uniform magnetic field of magnitude B
-                # Solves Ginzburg–Landau equations with an applied field
-                solution_field= self.default_solution("Bscan.h5",terminal_currents,device,vector_potential=B)
-                #Calculates total magnetic moment (uA · µm²) 
-                m = solution_field.magnetic_moment(units="uA * um**2", with_units=False)
-                moments.append(m)  # Almacena el valor
-                # Calculates volumetric magnetization: M = m / (Area ×depth)  in µA / µm³
-                M = m / (area * d)
-                magnetizations.append(M)
-                
-        # =========================
-        # 4) Susceptibility dM/dB
-        # =========================
-        magnetizations = np.array(magnetizations)
-        # Numeric derivation of the magnetization with respect to the field: dM/dB
-        suceptibility = np.gradient(magnetizations, field)
-        # =========================
-        # 5)Save data on files
-        # =========================
-        mag_path = os.path.join(save_dir,"magnetization_vs_B.txt")
-        susc_path = os.path.join(save_dir,"suceptibilidad_vs_B.txt")
-        np.savetxt(mag_path, np.column_stack((field, magnetizations)),header="B[mT] M[uA/um^3]")
-        np.savetxt(susc_path, np.column_stack((field, suceptibility)),header="B[mT] dM/dB [uA/(um^3·mT)]")
-        plot_info = plot_labels={"fig_name":"currents.jpg","title":f'applied field vs magnetizations({field_o}–{field_f} mT)',"x":"B mT","y":"magnetization"}
-        self.plot_parameters(field, -magnetizations,color_applied="green",plot_labels = plot_info,dir_path = save_dir+'/applied_field_vs_magnetization.jpg')
-        plt.plot(field, -suceptibility,color="orange")
-        plt.xlabel("B [$mT$]")
-        plt.ylabel("susceptibility [mu_m$]")
-        plt.grid()
-        plt.title("applied field vs susceptibility")
-        plt.savefig(save_dir+'/applied_field_vs_susceptibility.jpg')
-        return moments,magnetizations, suceptibility
+        if int(field_steps) != field_steps or field_steps < 2:
+            raise ValueError("field_steps must be an integer greater than one")
+        if not np.isfinite([field_o, field_f]).all() or field_o == field_f:
+            raise ValueError("field bounds must be finite and different")
+
+        thickness = float(self.gp.get("d", 0.1) if d is None else d)
+        if thickness <= 0:
+            raise ValueError("superconductor thickness d must be positive")
+        area = float(np.sum(device.areas))
+        if not np.isfinite(area) or area <= 0:
+            raise ValueError("device area must be finite and positive")
+
+        output_dir = save_dir if save_dir is not None else file_path
+        output_dir = output_dir or "."
+        os.makedirs(output_dir, exist_ok=True)
+
+        field = np.linspace(float(field_o), float(field_f), int(field_steps))
+        terminal_currents = {terminal.name: 0.0 for terminal in device.terminals}
+        moments = []
+        for index, field_value in enumerate(field):
+            solution_field = self.default_solution(
+                f"Bscan_{index:04d}.h5",
+                terminal_currents,
+                device,
+                vector_potential=field_value,
+            )
+            moments.append(
+                float(solution_field.magnetic_moment(units="uA * um**2", with_units=False))
+            )
+            if hasattr(solution_field, "close"):
+                solution_field.close()
+
+        moments = np.asarray(moments)
+        magnetizations = moments / (area * thickness)
+        susceptibility = np.gradient(magnetizations, field)
+
+        dd.save_data(
+            (field, magnetizations),
+            os.path.join(output_dir, "magnetization_vs_B.txt"),
+            "B[mT] M[uA/um^3]",
+        )
+        dd.save_data(
+            (field, susceptibility),
+            os.path.join(output_dir, "susceptibility_vs_B.txt"),
+            "B[mT] dM/dB[uA/(um^3*mT)]",
+        )
+        plot_info = {
+            "title": f"Magnetization vs applied field ({field_o}–{field_f} mT)",
+            "x": "B [mT]",
+            "y": "M [µA/µm³]",
+        }
+        self.plot_parameters(
+            field,
+            magnetizations,
+            color_applied="green",
+            plot_labels=plot_info,
+            dir_path=os.path.join(output_dir, "applied_field_vs_magnetization.jpg"),
+        )
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.plot(field, susceptibility, color="orange")
+        ax.set(xlabel="B [mT]", ylabel="dM/dB [µA/(µm³·mT)]", title="Susceptibility")
+        ax.grid(True)
+        fig.savefig(
+            os.path.join(output_dir, "applied_field_vs_susceptibility.jpg"),
+            facecolor="white",
+            bbox_inches="tight",
+        )
+        plt.show()
+        return moments, magnetizations, susceptibility
     def find_resistance(self,currents,voltages):
         '''
         This function calculates the resistance at each point in the IV curve by computing the gradient of voltage with respect to current.
@@ -1101,8 +1225,7 @@ class building :
         Returns:
         np.array: Array of resistance values calculated as dV/dI.
         '''
-        dV_dI = np.gradient(voltages, currents)
-        return dV_dI
+        return differential_resistance(currents, voltages)
     
     ######################################################################################
     #3)Varying height function for current increments
@@ -1125,27 +1248,43 @@ class building :
         np.array
             Array with current values where critical transitions occur.
         """
-        # 1. Calculate Differential Resistance (dV/dI)
-        # Use np.gradient which handles edges better than np.diff
-        dV_dI = np.gradient(voltages, currents)
+        currents, voltages = _validate_iv_data(currents, voltages, min_size=3)
+        if quantity < 1:
+            raise ValueError("quantity must be at least one")
+        if not 0 <= prominence <= 1:
+            raise ValueError("prominence must be between zero and one")
+        if poly_order < 0:
+            raise ValueError("poly_order must be non-negative")
+
+        # The magnitude works for both ascending positive sweeps and descending
+        # negative sweeps, independent of probe polarity.
+        differential_resistance = np.abs(np.gradient(voltages, currents))
         
         # 2. Smooth the signal to remove numerical noise
         # This is crucial for discrete simulations
-        if len(dV_dI) > smooth_window:
-            dV_dI_smooth = savgol_filter(dV_dI, window_length=smooth_window, polyorder=poly_order)
+        window = min(int(smooth_window), differential_resistance.size)
+        if window % 2 == 0:
+            window -= 1
+        if window > poly_order and window >= 3:
+            smoothed = savgol_filter(
+                differential_resistance, window_length=window, polyorder=poly_order
+            )
         else:
-            dV_dI_smooth = dV_dI
+            smoothed = differential_resistance
 
         # 3. Find peaks
         # 'prominence' ensures it is a real peak and not just noise
         # The threshold is calculated as a percentage of the maximum peak found
-        height_threshold = np.max(np.abs(dV_dI_smooth)) * prominence
-        peak_indices, properties = find_peaks(dV_dI_smooth, height=height_threshold)
+        prominence_threshold = np.ptp(smoothed) * prominence
+        peak_indices, properties = find_peaks(
+            smoothed,
+            prominence=prominence_threshold,
+        )
         
         # 4. Select the best candidates if there are too many
         if len(peak_indices) > quantity:
             # Sort by peak height (largest voltage jumps first)
-            heights = properties['peak_heights']
+            heights = properties['prominences']
             # Get indices of the 'quantity' highest peaks
             best_indices = np.argsort(heights)[-quantity:]
             peak_indices = peak_indices[best_indices]
@@ -1153,6 +1292,15 @@ class building :
             peak_indices.sort()
             
         return currents[peak_indices]
+
+    def estimate_critical_current(self, currents, voltages, voltage_threshold):
+        """Estimate the first threshold-crossing current by linear interpolation.
+
+        This single-criterion estimate is preferable to peak finding when an
+        experimental or numerical voltage criterion is known. The threshold is
+        applied to ``abs(voltage)`` and the signed current is returned.
+        """
+        return critical_current_at_voltage(currents, voltages, voltage_threshold)
 
     def calculate_diode_efficiency(self,ic_positive, ic_negative):
         """
@@ -1168,28 +1316,7 @@ class building :
         np.array
             Array with efficiency values (-1 to 1).
         """
-        # Ensure they are numpy arrays
-        I_plus = np.array(ic_positive)
-        
-        # Take absolute value for safety, in case -15 uA is passed instead of 15 uA
-        I_minus = np.abs(np.array(ic_negative))
-        
-        # Verify they have the same size
-        if I_plus.shape != I_minus.shape:
-            # Ideally handle mismatch or raise error. 
-            # For simplicity, we raise an error here to alert the user.
-            raise ValueError(f"Arrays must have the same size. Ic+: {I_plus.shape}, Ic-: {I_minus.shape}")
-
-        # Calculate denominator avoiding division by zero
-        denominator = I_plus + I_minus
-        
-        # Handle zeros: if both currents are 0, efficiency is 0 (or undefined, we set 0)
-        with np.errstate(divide='ignore', invalid='ignore'):
-            eta = (I_plus - I_minus) / denominator
-            # Where denominator is 0, set eta to 0
-            eta[denominator == 0] = 0.0
-            
-        return eta
+        return diode_efficiency(ic_positive, ic_negative)
     def varying_increments(self, heights, currents, save_dir, file_suffix="", field=0, device_view=True, del_info=True):
             '''
             Applies a current sweep to devices with varying heights.
@@ -1199,6 +1326,8 @@ class building :
             2. Passes 'save_dir' down so temp files are created there (saving C: drive space).
             3. Correct arguments for current_application.
             '''
+            heights = _as_finite_1d(heights, "heights")
+            currents = _as_finite_1d(currents, "currents")
             voltages_arr = []
             resistance_arr = []
             
@@ -1214,7 +1343,11 @@ class building :
             for i, h in enumerate(heights):
                 # Define specific sub-folder for this height
                 # We use this path for both saving results AND temporary files
-                current_save_path = os.path.join(save_dir, f'vert_dy_{i}')
+                current_save_path = (
+                    save_dir
+                    if len(heights) == 1
+                    else os.path.join(save_dir, f'dy_{h:g}')
+                )
                 if not os.path.exists(current_save_path):
                     os.makedirs(current_save_path)
                 
@@ -1227,7 +1360,8 @@ class building :
                     self.layer, 
                     self.gp["dimensions"], 
                     incrementy=h, 
-                    device_view=device_view
+                    device_view=device_view,
+                    length_units=self.gp["length_units"],
                 )
 
                 # 2. Add Terminals
@@ -1238,8 +1372,9 @@ class building :
                     self.terminal_dict, 
                     self.layer, 
                     self.max_edge_length_iv,
-                    view_device=device_view, stripe_length=self.gp.get("stripe_length", 0),
-                    orientation=self.gp.get("orientation", "vertical")
+                    view_device=device_view, stripe_length=self.gp["stripe_length"],
+                    orientation=self.gp.get("orientation", "vertical"),
+                    smoothing_steps=self.smoothing_steps,
                 )
 
                 # 3. Apply Currents
@@ -1271,19 +1406,31 @@ class building :
 
             return voltages_arr, resistance_arr
 
-    def current_application(self, device, currents, file_path, B_field=0, temp_dir_root=None, del_info=True):
+    def current_application(
+        self, device, currents, file_path, B_field=0, temp_dir_root=None,
+        del_info=True, averaging_tmin=120, absolute_voltage=False,
+    ):
         '''
-        Applies current sweep.
-        
-        FIXES:
-        1. 'dir=temp_dir_root' in TemporaryDirectory forces creation on the correct drive.
-        2. Explicit garbage collection (del solution_c) to free memory/file handles.
+        Apply a current sweep and return voltage and differential resistance.
+
+        Voltage is signed by default so probe polarity and non-reciprocity are not
+        discarded. Set ``absolute_voltage=True`` only for legacy magnitude plots.
+        ``del_info`` is retained for notebook compatibility.
         '''
+        del del_info
+        currents = _as_finite_1d(currents, "currents")
+        if averaging_tmin < 0:
+            raise ValueError("averaging_tmin must be non-negative")
+        terminal_names = [terminal.name for terminal in device.terminals]
+        if len(terminal_names) < 2:
+            raise ValueError("current sweeps require at least two device terminals")
         voltages = []
         
         # If no temp root provided, fallback to file_path, else current dir
         if temp_dir_root is None:
             temp_dir_root = file_path if os.path.exists(file_path) else os.getcwd()
+        os.makedirs(temp_dir_root, exist_ok=True)
+        os.makedirs(file_path, exist_ok=True)
 
         start_time = time.time()
         
@@ -1294,7 +1441,9 @@ class building :
                 # Unique filename per step
                 filename = os.path.join(temp_dir, f'solution_step_{j}.h5')
                 
-                applied_currents = {"term_s": I, "term_d": -I}
+                applied_currents = dict.fromkeys(terminal_names, 0.0)
+                applied_currents[terminal_names[0]] = I
+                applied_currents[terminal_names[1]] = -I
                 
                 # Run Solver
                 solution_c = self.default_solution(
@@ -1306,8 +1455,16 @@ class building :
                 
                 # Extract Data
                 dynamics = solution_c.dynamics
-                indices = dynamics.time_slice(tmin=120)
-                voltage = np.abs(np.mean(dynamics.voltage()[indices]))
+                indices = dynamics.time_slice(tmin=averaging_tmin)
+                voltage_samples = np.asarray(dynamics.voltage()[indices])
+                if voltage_samples.size == 0:
+                    raise ValueError(
+                        f"no voltage samples exist after t={averaging_tmin}; "
+                        "lower averaging_tmin or increase solve_time"
+                    )
+                voltage = float(np.mean(voltage_samples))
+                if absolute_voltage:
+                    voltage = abs(voltage)
                 voltages.append(voltage)
                 
                 # Progress
@@ -1323,14 +1480,14 @@ class building :
                 try:
                     if os.path.exists(filename):
                         os.remove(filename)
-                except Exception:
-                    pass # TempDir cleanup will catch it later if this fails
+                except OSError:
+                    pass # TemporaryDirectory cleanup will retry.
 
         # Calculate Resistance
         if len(currents) > 1:
             resistances = self.find_resistance(currents, voltages)
         else:
-            resistances = [v/c if c!=0 else 0 for v, c in zip(voltages, currents)]
+            resistances = np.array([voltages[0] / currents[0] if currents[0] else 0.0])
 
         # Save Data
         dd.save_data((currents, voltages), os.path.join(file_path, 'voltage_vs_current.txt'), "currents(uA) Voltages(V0)")
@@ -1342,5 +1499,8 @@ class building :
         print(f"✅ Simulation Complete. Time: {total_time:.2f}s ({total_time/len(currents):.2f}s/step)")
         print("-"*50)
         
-        return voltages, resistances
-        
+        return np.asarray(voltages), np.asarray(resistances)
+
+
+# Backward-compatible alias used throughout the original notebook.
+building = Building
