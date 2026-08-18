@@ -4,10 +4,14 @@ from tdgl.sources import ConstantField
 from tdgl.geometry import box
 import default_directories as dd
 from diode_analysis import (
+    analyze_diode_branches as analyze_diode_branches_data,
     critical_current_at_voltage,
     differential_resistance,
     diode_efficiency,
     finite_1d as _as_finite_1d,
+    plan_refined_sampling as plan_refined_sampling_data,
+    shared_voltage_criterion,
+    transition_diagnostics,
     validate_iv_data as _validate_iv_data,
 )
 import matplotlib.pyplot as plt
@@ -17,6 +21,16 @@ import string
 import tdgl
 import time
 import os
+
+
+def _device_bounds_center(device):
+    """Return the center of the film bounding box, independent of point density."""
+    min_x, min_y, max_x, max_y = device.film.polygon.bounds
+    center = np.array([(min_x + max_x) / 2, (min_y + max_y) / 2], dtype=float)
+    if not np.all(np.isfinite(center)):
+        raise ValueError("device film has non-finite bounds")
+    return center
+
 
 def create_terminal_dictionary(terminals,names):
         if len(terminals) != len(names):
@@ -138,7 +152,7 @@ def add_terminals_by_id(device, segments, source_id, drain_id, layer, max_edge_l
         raise ValueError("source_id and drain_id must identify different segments")
     if any(index < 0 or index >= len(segments) for index in (source_id, drain_id)):
         raise ValueError(f"segment IDs must be in the range [0, {len(segments) - 1}]")
-    device_center = np.mean(np.asarray(device.film.points), axis=0)
+    device_center = _device_bounds_center(device)
 
     # --- 1. Create Source ---
     seg_s = segments[source_id]
@@ -408,17 +422,31 @@ def add_multiple_terminals(
     """
     if len(terminal_configs) < 2:
         raise ValueError("at least two terminal configurations are required")
+    central_probe_separation = float(central_probe_separation)
+    sep_constant = float(sep_constant)
+    max_edge_length = float(max_edge_length)
+    if not np.isfinite(central_probe_separation) or not np.isfinite(sep_constant):
+        raise ValueError("probe separation parameters must be finite")
     if central_probe_separation <= 0 or sep_constant <= 0:
         raise ValueError("probe separation parameters must be positive")
-    if max_edge_length <= 0 or smoothing_steps < 0:
-        raise ValueError("max_edge_length must be positive and smoothing_steps non-negative")
+    if not np.isfinite(max_edge_length) or max_edge_length <= 0:
+        raise ValueError("max_edge_length must be finite and positive")
+    if isinstance(smoothing_steps, (bool, np.bool_)):
+        raise ValueError("smoothing_steps must be a non-negative integer")
+    smoothing_steps_value = float(smoothing_steps)
+    if (
+        not np.isfinite(smoothing_steps_value)
+        or not smoothing_steps_value.is_integer()
+        or smoothing_steps_value < 0
+    ):
+        raise ValueError("smoothing_steps must be a non-negative integer")
+    smoothing_steps = int(smoothing_steps_value)
     orientation = orientation.lower()
     if orientation not in {"horizontal", "vertical"}:
         raise ValueError("orientation must be 'horizontal' or 'vertical'")
 
     new_terminals = list(device.terminals)
-    all_points = np.vstack([s['points'] for s in segments])
-    device_center = np.mean(all_points, axis=0)
+    device_center = _device_bounds_center(device)
     existing_names = {terminal.name for terminal in new_terminals}
     requested_names = [str(config["name"]) for config in terminal_configs]
     if len(set(requested_names)) != len(requested_names):
@@ -428,7 +456,16 @@ def add_multiple_terminals(
     
     # 1. Add All Requested Terminals
     for config in terminal_configs:
-        seg_id = config['id']
+        seg_id_value = config['id']
+        if isinstance(seg_id_value, (bool, np.bool_)):
+            raise ValueError("terminal segment IDs must be integers")
+        try:
+            seg_id_numeric = float(seg_id_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("terminal segment IDs must be integers") from exc
+        if not np.isfinite(seg_id_numeric) or not seg_id_numeric.is_integer():
+            raise ValueError("terminal segment IDs must be integers")
+        seg_id = int(seg_id_numeric)
         name_suffix = f"_{config['name']}"
         
         if seg_id < 0 or seg_id >= len(segments):
@@ -457,10 +494,11 @@ def add_multiple_terminals(
         # Default: Align along X-axis (Horizontal)
         flow_dir = np.array([1.0, 0.0])
 
-    # Place probes
-    # Using the 0.7 multiplier from your snippet
-    p1 = device_center - (flow_dir * (central_probe_separation * sep_constant))
-    p2 = device_center + (flow_dir * (central_probe_separation * sep_constant))
+    # Place probes symmetrically. ``central_probe_separation`` means the total
+    # requested spacing; ``sep_constant`` scales that spacing without doubling it.
+    probe_half_span = 0.5 * central_probe_separation * sep_constant
+    p1 = device_center - (flow_dir * probe_half_span)
+    p2 = device_center + (flow_dir * probe_half_span)
     
     # THIS is the key: we only put these 2 into the array
     final_probes = np.array([p1, p2])
@@ -480,8 +518,15 @@ def add_multiple_terminals(
     )
     
     # 4. Remesh & Plot
-    print(f"Remeshing... Probes placed {central_probe_separation}um apart at center ({orientation}).")
-    new_device.make_mesh(max_edge_length=max_edge_length, smooth=int(smoothing_steps))
+    actual_separation = 2 * probe_half_span
+    print(
+        f"Remeshing... Probes placed {actual_separation:g} {device.length_units} "
+        f"apart at the bounds center ({orientation})."
+    )
+    new_device.make_mesh(max_edge_length=max_edge_length, smooth=smoothing_steps)
+    mesh_areas = np.asarray(new_device.mesh.areas, dtype=float)
+    if mesh_areas.size == 0 or not np.all(np.isfinite(mesh_areas)) or np.any(mesh_areas <= 0):
+        raise ValueError("generated mesh contains non-positive or non-finite cell areas")
     if view_device:
         fig, ax = new_device.plot(mesh=True)
     
@@ -510,7 +555,8 @@ class Building:
         self.terminals = terminals
         self.terminal_names = terminal_names
         self.terminal_dict = create_terminal_dictionary(terminals,terminal_names)
-        self.tempdir = tempfile.TemporaryDirectory()
+        self.tempdir = tempfile.TemporaryDirectory(prefix="electro2_")
+        self._sweep_counter = 0
         self.gp = gp
         max_edge_length_iv = gp["xi"] / 1.5
         self.max_edge_length_iv=  max_edge_length_iv
@@ -518,6 +564,7 @@ class Building:
         self.smoothing_steps = int(gp.get("smoothing_steps", 100))
         device_prototype = create_device(
             geometry, layer, gp["dimensions"], incrementx=0, incrementy=0,
+            device_view=False, clear_device_view=False,
             length_units=gp["length_units"],
         )
         # Recompute the boundary from this exact geometry. ``segments_found`` is
@@ -532,8 +579,15 @@ class Building:
             max_edge_length_iv,
             stripe_length=gp["stripe_length"],
             orientation=gp["orientation"],
+            central_probe_separation=float(gp.get("probe_separation", 3.0)),
+            sep_constant=float(gp.get("probe_separation_scale", 0.7)),
+            view_device=False,
             smoothing_steps=self.smoothing_steps,
         )
+
+    def close(self):
+        """Release temporary HDF5 solutions owned by this simulation object."""
+        self.tempdir.cleanup()
 
  
     def default_options(self,d_filename,skip_t=200,solve_t=200,saves=200):
@@ -570,6 +624,11 @@ class Building:
             name: float(terminal_currents_applied.get(name, 0.0))
             for name in terminal_names
         }
+        if not np.all(np.isfinite(list(terminal_currents_applied.values()))):
+            raise ValueError("terminal currents must be finite")
+        vector_potential = float(vector_potential)
+        if not np.isfinite(vector_potential):
+            raise ValueError("vector_potential must be finite")
         total_current = sum(terminal_currents_applied.values())
         if not np.isclose(total_current, 0.0, atol=1e-12):
             raise ValueError(
@@ -606,7 +665,11 @@ class Building:
 
         solutions = []
         labels = []
-        file_name = f'sweep_B_{len(fields)}_H_{len(heights)}_I_{len(currents)}.h5'
+        self._sweep_counter += 1
+        sweep_name = (
+            f"sweep_{self._sweep_counter:03d}_B_{len(fields)}_"
+            f"H_{len(heights)}_I_{len(currents)}"
+        )
         
         total_steps = len(currents) * len(fields) * len(heights)
         step_count = 0
@@ -636,6 +699,8 @@ class Building:
                 view_device=device_view,
                 stripe_length=self.gp["stripe_length"],
                 orientation=self.gp["orientation"],
+                central_probe_separation=float(self.gp.get("probe_separation", 3.0)),
+                sep_constant=float(self.gp.get("probe_separation_scale", 0.7)),
                 smoothing_steps=self.smoothing_steps,
             )
             
@@ -652,8 +717,9 @@ class Building:
                     terminal_currents[dynamic_terminal_names[0]] = I
                     terminal_currents[dynamic_terminal_names[1]] = -I
 
+                    solution_file = f"{sweep_name}_{step_count:04d}.h5"
                     sol = self.default_solution(
-                        file_name, 
+                        solution_file,
                         terminal_currents, 
                         device=device, 
                         vector_potential=B
@@ -692,7 +758,7 @@ class Building:
             orient = "horizontal" if len(solutions) <= 4 else "vertical"
             full_save_path = None
             if save_dir:
-                full_save_path = os.path.join(save_dir, file_name + "_sweep_result.jpg")
+                full_save_path = os.path.join(save_dir, sweep_name + "_result.jpg")
                 
             # FIX: Removed self. if plot_parameter_sweep is global
             fig, axes = self.plot_parameter_sweep(
@@ -1164,39 +1230,72 @@ class Building:
         os.makedirs(output_dir, exist_ok=True)
 
         field = np.linspace(float(field_o), float(field_f), int(field_steps))
+        if not np.all(np.isfinite(field)):
+            raise ValueError("field grid overflowed; choose smaller field bounds")
+        field_spacing = np.min(np.abs(np.diff(field)))
+        field_scale = max(1.0, float(np.max(np.abs(field))))
+        if field_spacing <= 8 * np.finfo(float).eps * field_scale:
+            raise ValueError("field spacing is too small for stable susceptibility")
         terminal_currents = {terminal.name: 0.0 for terminal in device.terminals}
+        current_units = self.gp["current_units"]
+        length_units = self.gp["length_units"]
+        field_units = self.gp["field_units"]
+        moment_units = f"{current_units} * {length_units}**2"
         moments = []
         for index, field_value in enumerate(field):
-            solution_field = self.default_solution(
-                f"Bscan_{index:04d}.h5",
-                terminal_currents,
-                device,
-                vector_potential=field_value,
-            )
-            moments.append(
-                float(solution_field.magnetic_moment(units="uA * um**2", with_units=False))
-            )
-            if hasattr(solution_field, "close"):
-                solution_field.close()
+            solution_field = None
+            try:
+                solution_field = self.default_solution(
+                    f"Bscan_{index:04d}.h5",
+                    terminal_currents,
+                    device,
+                    vector_potential=field_value,
+                )
+                moment = float(
+                    solution_field.magnetic_moment(
+                        units=moment_units, with_units=False
+                    )
+                )
+                if not np.isfinite(moment):
+                    raise ValueError(
+                        f"non-finite magnetic moment at B={field_value:g} "
+                        f"{self.gp['field_units']}"
+                    )
+                moments.append(moment)
+            finally:
+                if solution_field is not None and hasattr(solution_field, "close"):
+                    solution_field.close()
 
         moments = np.asarray(moments)
-        magnetizations = moments / (area * thickness)
-        susceptibility = np.gradient(magnetizations, field)
+        try:
+            with np.errstate(over="raise", divide="raise", invalid="raise"):
+                magnetizations = moments / (area * thickness)
+                susceptibility = np.gradient(
+                    magnetizations,
+                    field,
+                    edge_order=2 if field.size >= 3 else 1,
+                )
+        except FloatingPointError as exc:
+            raise ValueError(
+                "magnetization or susceptibility overflowed; check area, thickness, and field spacing"
+            ) from exc
+        if not np.all(np.isfinite(magnetizations)) or not np.all(np.isfinite(susceptibility)):
+            raise ValueError("magnetization analysis produced non-finite values")
 
         dd.save_data(
             (field, magnetizations),
             os.path.join(output_dir, "magnetization_vs_B.txt"),
-            "B[mT] M[uA/um^3]",
+            f"B[{field_units}] M[{current_units}/{length_units}^3]",
         )
         dd.save_data(
             (field, susceptibility),
             os.path.join(output_dir, "susceptibility_vs_B.txt"),
-            "B[mT] dM/dB[uA/(um^3*mT)]",
+            f"B[{field_units}] dM/dB[{current_units}/({length_units}^3*{field_units})]",
         )
         plot_info = {
-            "title": f"Magnetization vs applied field ({field_o}–{field_f} mT)",
-            "x": "B [mT]",
-            "y": "M [µA/µm³]",
+            "title": f"Magnetization vs applied field ({field_o}–{field_f} {field_units})",
+            "x": f"B [{field_units}]",
+            "y": f"M [{current_units}/{length_units}³]",
         }
         self.plot_parameters(
             field,
@@ -1207,7 +1306,11 @@ class Building:
         )
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.plot(field, susceptibility, color="orange")
-        ax.set(xlabel="B [mT]", ylabel="dM/dB [µA/(µm³·mT)]", title="Susceptibility")
+        ax.set(
+            xlabel=f"B [{field_units}]",
+            ylabel=f"dM/dB [{current_units}/({length_units}³·{field_units})]",
+            title="Susceptibility",
+        )
         ax.grid(True)
         fig.savefig(
             os.path.join(output_dir, "applied_field_vs_susceptibility.jpg"),
@@ -1231,7 +1334,10 @@ class Building:
     #3)Varying height function for current increments
     ########################################################
 
-    def find_critical_currents(self,currents, voltages, quantity:int=5, smooth_window:int=11, poly_order=3, prominence=0.1):
+    def find_critical_currents(
+        self, currents, voltages, quantity:int=5, smooth_window:int=11,
+        poly_order=3, prominence=0.1, fallback_to_voltage=True,
+    ):
         """
         Finds critical currents (Ic) by analyzing peaks in the differential resistance (dV/dI).
         It is more robust to noise than the simple threshold method.
@@ -1249,28 +1355,43 @@ class Building:
             Array with current values where critical transitions occur.
         """
         currents, voltages = _validate_iv_data(currents, voltages, min_size=3)
-        if quantity < 1:
-            raise ValueError("quantity must be at least one")
-        if not 0 <= prominence <= 1:
-            raise ValueError("prominence must be between zero and one")
-        if poly_order < 0:
-            raise ValueError("poly_order must be non-negative")
+        for value, name, minimum in (
+            (quantity, "quantity", 1),
+            (smooth_window, "smooth_window", 1),
+            (poly_order, "poly_order", 0),
+        ):
+            if isinstance(value, (bool, np.bool_)):
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must be an integer >= {minimum}") from exc
+            if not np.isfinite(numeric) or not numeric.is_integer() or numeric < minimum:
+                raise ValueError(f"{name} must be an integer >= {minimum}")
+        quantity = int(quantity)
+        smooth_window = int(smooth_window)
+        poly_order = int(poly_order)
+        prominence = float(prominence)
+        if not np.isfinite(prominence) or not 0 <= prominence <= 1:
+            raise ValueError("prominence must be finite and between zero and one")
 
         # The magnitude works for both ascending positive sweeps and descending
         # negative sweeps, independent of probe polarity.
-        differential_resistance = np.abs(np.gradient(voltages, currents))
+        resistance_magnitude = np.abs(differential_resistance(currents, voltages))
         
         # 2. Smooth the signal to remove numerical noise
         # This is crucial for discrete simulations
-        window = min(int(smooth_window), differential_resistance.size)
+        window = min(int(smooth_window), resistance_magnitude.size)
         if window % 2 == 0:
             window -= 1
         if window > poly_order and window >= 3:
             smoothed = savgol_filter(
-                differential_resistance, window_length=window, polyorder=poly_order
+                resistance_magnitude, window_length=window, polyorder=poly_order
             )
         else:
-            smoothed = differential_resistance
+            smoothed = resistance_magnitude
+        if not np.all(np.isfinite(smoothed)):
+            raise ValueError("smoothed differential resistance contains non-finite values")
 
         # 3. Find peaks
         # 'prominence' ensures it is a real peak and not just noise
@@ -1291,7 +1412,15 @@ class Building:
             # Reorder to keep chronological current order
             peak_indices.sort()
             
-        return currents[peak_indices]
+        critical_currents = currents[peak_indices]
+        if critical_currents.size == 0 and fallback_to_voltage:
+            criterion = shared_voltage_criterion(voltages, voltages)
+            diagnostic = transition_diagnostics(
+                currents, voltages, criterion, min_consecutive=3
+            )
+            if diagnostic.reached_threshold:
+                critical_currents = np.array([diagnostic.critical_current])
+        return critical_currents
 
     def estimate_critical_current(self, currents, voltages, voltage_threshold):
         """Estimate the first threshold-crossing current by linear interpolation.
@@ -1317,6 +1446,34 @@ class Building:
             Array with efficiency values (-1 to 1).
         """
         return diode_efficiency(ic_positive, ic_negative)
+
+    def analyze_diode_branches(
+        self,
+        positive_currents,
+        positive_voltages,
+        negative_currents,
+        negative_voltages,
+        voltage_threshold=None,
+        *,
+        min_consecutive=3,
+    ):
+        """Analyze both current directions at one shared voltage criterion."""
+        return analyze_diode_branches_data(
+            positive_currents,
+            positive_voltages,
+            negative_currents,
+            negative_voltages,
+            voltage_threshold,
+            min_consecutive=min_consecutive,
+        )
+
+    def plan_refined_sampling(
+        self, critical_currents, total_steps, critical_fraction=0.6
+    ):
+        """Allocate refinement samples without dividing by an empty result."""
+        return plan_refined_sampling_data(
+            critical_currents, total_steps, critical_fraction
+        )
     def varying_increments(self, heights, currents, save_dir, file_suffix="", field=0, device_view=True, del_info=True):
             '''
             Applies a current sweep to devices with varying heights.
@@ -1327,7 +1484,23 @@ class Building:
             3. Correct arguments for current_application.
             '''
             heights = _as_finite_1d(heights, "heights")
-            currents = _as_finite_1d(currents, "currents")
+            height_tags = [dd.height_directory_name(height) for height in heights]
+            if len(set(height_tags)) != len(height_tags):
+                raise ValueError("heights must not contain duplicates")
+            currents = _as_finite_1d(currents, "currents", min_size=2)
+            with np.errstate(over="ignore", invalid="ignore"):
+                current_differences = np.diff(currents)
+            if not np.all(np.isfinite(current_differences)):
+                raise ValueError("adjacent current differences overflowed")
+            if np.any(current_differences == 0) or not (
+                np.all(current_differences > 0) or np.all(current_differences < 0)
+            ):
+                raise ValueError("currents must be strictly monotonic")
+            field = float(field)
+            if not np.isfinite(field):
+                raise ValueError("field must be a finite scalar")
+            if not save_dir:
+                raise ValueError("save_dir must be a non-empty path")
             voltages_arr = []
             resistance_arr = []
             
@@ -1340,13 +1513,13 @@ class Building:
             if not os.path.exists(local_temp_root):
                 os.makedirs(local_temp_root)
 
-            for i, h in enumerate(heights):
+            for i, (h, height_tag) in enumerate(zip(heights, height_tags)):
                 # Define specific sub-folder for this height
                 # We use this path for both saving results AND temporary files
                 current_save_path = (
                     save_dir
                     if len(heights) == 1
-                    else os.path.join(save_dir, f'dy_{h:g}')
+                    else os.path.join(save_dir, height_tag)
                 )
                 if not os.path.exists(current_save_path):
                     os.makedirs(current_save_path)
@@ -1374,6 +1547,8 @@ class Building:
                     self.max_edge_length_iv,
                     view_device=device_view, stripe_length=self.gp["stripe_length"],
                     orientation=self.gp.get("orientation", "vertical"),
+                    central_probe_separation=float(self.gp.get("probe_separation", 3.0)),
+                    sep_constant=float(self.gp.get("probe_separation_scale", 0.7)),
                     smoothing_steps=self.smoothing_steps,
                 )
 
@@ -1392,8 +1567,9 @@ class Building:
                 self.plot_info1 = {"fig_name": "currents.jpg", "title": f'I vs V (dy={h})', "x": "current [uA]", "y": "voltage [V0]"}
                 self.plot_info2 = {"fig_name": "currents.jpg", "title": f'I vs R (dy={h})', "x": "current [uA]", "y": "resistance [R0]"}
                 
-                plot_filename_v = f'voltage_vs_current_dy{i}_{file_suffix}.jpg'
-                plot_filename_r = f'voltage_vs_resistance_dy{i}_{file_suffix}.jpg'
+                suffix = f"_{file_suffix}" if file_suffix else ""
+                plot_filename_v = f'voltage_vs_current_dy{h:g}{suffix}.jpg'
+                plot_filename_r = f'resistance_vs_current_dy{h:g}{suffix}.jpg'
                 
                 self.plot_parameters(currents, voltages, self.plot_info1, plot_type="plot", 
                                     dir_path=os.path.join(current_save_path, plot_filename_v), color_applied="blue")
@@ -1419,8 +1595,21 @@ class Building:
         '''
         del del_info
         currents = _as_finite_1d(currents, "currents")
-        if averaging_tmin < 0:
-            raise ValueError("averaging_tmin must be non-negative")
+        if currents.size > 1:
+            with np.errstate(over="ignore", invalid="ignore"):
+                differences = np.diff(currents)
+            if not np.all(np.isfinite(differences)):
+                raise ValueError("adjacent current differences overflowed")
+            if np.any(differences == 0) or not (
+                np.all(differences > 0) or np.all(differences < 0)
+            ):
+                raise ValueError("currents must be strictly monotonic")
+        B_field = float(B_field)
+        if not np.isfinite(B_field):
+            raise ValueError("B_field must be a finite scalar")
+        averaging_tmin = float(averaging_tmin)
+        if not np.isfinite(averaging_tmin) or averaging_tmin < 0:
+            raise ValueError("averaging_tmin must be finite and non-negative")
         terminal_names = [terminal.name for terminal in device.terminals]
         if len(terminal_names) < 2:
             raise ValueError("current sweeps require at least two device terminals")
@@ -1445,44 +1634,53 @@ class Building:
                 applied_currents[terminal_names[0]] = I
                 applied_currents[terminal_names[1]] = -I
                 
-                # Run Solver
-                solution_c = self.default_solution(
-                    filename,
-                    applied_currents, 
-                    device=device,
-                    vector_potential=B_field
-                )
-                
-                # Extract Data
-                dynamics = solution_c.dynamics
-                indices = dynamics.time_slice(tmin=averaging_tmin)
-                voltage_samples = np.asarray(dynamics.voltage()[indices])
-                if voltage_samples.size == 0:
-                    raise ValueError(
-                        f"no voltage samples exist after t={averaging_tmin}; "
-                        "lower averaging_tmin or increase solve_time"
+                solution_c = None
+                try:
+                    solution_c = self.default_solution(
+                        filename,
+                        applied_currents,
+                        device=device,
+                        vector_potential=B_field,
                     )
-                voltage = float(np.mean(voltage_samples))
-                if absolute_voltage:
-                    voltage = abs(voltage)
-                voltages.append(voltage)
+
+                    dynamics = solution_c.dynamics
+                    indices = dynamics.time_slice(tmin=averaging_tmin)
+                    voltage_samples = np.asarray(
+                        dynamics.voltage()[indices], dtype=float
+                    )
+                    if voltage_samples.size == 0:
+                        raise ValueError(
+                            f"no voltage samples exist after t={averaging_tmin}; "
+                            "lower averaging_tmin or increase solve_time"
+                        )
+                    if not np.all(np.isfinite(voltage_samples)):
+                        raise ValueError("voltage trace contains NaN or infinite values")
+                    with np.errstate(over="raise", invalid="raise"):
+                        voltage = float(np.mean(voltage_samples))
+                    if not np.isfinite(voltage):
+                        raise ValueError("mean voltage is not finite")
+                    if absolute_voltage:
+                        voltage = abs(voltage)
+                    voltages.append(voltage)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"current sweep failed at step {j + 1}/{len(currents)}: "
+                        f"I={I:g} {self.gp['current_units']}, "
+                        f"B={B_field:g} {self.gp['field_units']}"
+                    ) from exc
+                finally:
+                    if solution_c is not None and hasattr(solution_c, 'close'):
+                        solution_c.close()
+                    if os.path.exists(filename):
+                        try:
+                            os.remove(filename)
+                        except OSError:
+                            pass
                 
                 # Progress
                 progress = (j + 1) / len(currents) * 100
                 print(f"I={I:.1f}uA, V={voltage:.4f} [Progress: {progress:.1f}%]", end='\r')
                 
-                # CRITICAL: Close solution to release file handle immediately
-                if hasattr(solution_c, 'close'):
-                    solution_c.close()
-                del solution_c 
-                
-                # Try to remove file immediately to save space
-                try:
-                    if os.path.exists(filename):
-                        os.remove(filename)
-                except OSError:
-                    pass # TemporaryDirectory cleanup will retry.
-
         # Calculate Resistance
         if len(currents) > 1:
             resistances = self.find_resistance(currents, voltages)

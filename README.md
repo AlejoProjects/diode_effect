@@ -42,6 +42,10 @@ Important limitations:
 - Critical currents depend on the voltage criterion, sampling density, relaxation
   time, mesh convergence, and noise treatment. A single reported value should be
   accompanied by those choices.
+- pyTDGL can warn about malformed boundary Voronoi cells for this stepped geometry.
+  The project rejects non-finite or non-positive mesh-cell areas, but that check
+  does not replace a mesh/boundary-resampling convergence study before treating
+  a small efficiency as physical.
 
 ## Repository layout
 
@@ -161,7 +165,8 @@ number of current and field points to validate geometry and terminal placement.
 
 1. Define material parameters and the bridge dimensions.
 2. Draw the unmeshed device and inspect numbered boundary segments.
-3. Select two terminal segments and verify the voltage-probe orientation.
+3. Select two terminal segments and verify the voltage-probe orientation,
+   bounds-centered positions, and actual separation printed during meshing.
 4. Run a coarse positive/negative current sweep at fixed magnetic field.
 5. Check time traces to ensure the voltage averaging interval is in steady state.
 6. Refine the mesh, time settings, and current grid around the transition.
@@ -199,6 +204,35 @@ more reproducible choice.
 Voltage is now stored with its sign. The first probe minus the second probe fixes
 the voltage polarity. Use `absolute_voltage=True` in `current_application()` only
 when reproducing legacy magnitude-only plots.
+
+### Finding a credible diode-effect window
+
+Section 4 starts with a coarse paired sweep at `B = 1 mT`, `|I| <= 30 µA`, and
+161 samples. These are search starting points, not a claim that this exact device
+must show a transition there. If either polarity does not cross the shared
+voltage criterion, the analysis returns a diagnostic and `NaN` for that geometry
+instead of dividing by zero or inventing an efficiency.
+
+For a useful parameter search:
+
+1. Run paired current branches at `B = ±0.5, ±1, ±1.5, ±2 mT` (and a zero-field
+   control), increasing `|I|max` until both branches clearly reach the resistive
+   state.
+2. Use one voltage criterion above the low-current noise floor for every branch
+   being compared. The notebook chooses a robust shared criterion automatically
+   unless `voltage_criterion` is set explicitly.
+3. Require at least three consecutive samples above the criterion; isolated
+   voltage spikes are not accepted as a transition.
+4. Look for nonzero `eta(B)` that approximately obeys `eta(-B) = -eta(B)` and
+   approaches zero at `B = 0`. A field-even offset is a warning sign for probe,
+   relaxation, meshing, or threshold bias.
+5. Refine the current grid, mesh, and time averaging around the best candidate,
+   then confirm that the result is stable to those numerical choices.
+
+Use `Building.analyze_diode_branches()` for the non-throwing paired diagnostic
+and `Building.plan_refined_sampling()` for safe refinement allocation. An empty
+critical-region array now means “skip refinement and expand the coarse search”;
+it is no longer treated as an exceptional divisor.
 
 ## Output conventions
 
